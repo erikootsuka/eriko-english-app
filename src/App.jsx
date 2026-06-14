@@ -62,19 +62,22 @@ function levelBg(level) {
 
 // ===================== API =====================
 async function callClaude(systemPrompt, userMessage) {
-  const res = await fetch("/api/chat", {
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
+      model: "claude-sonnet-4-6",
+      max_tokens: 1000,
       system: systemPrompt,
-      message: userMessage,
+      messages: [{ role: "user", content: userMessage }],
     }),
   });
   const data = await res.json();
   return data.content?.[0]?.text || "";
 }
+
 // ===================== COMPONENTS =====================
 
 // --- BOTTOM NAV ---
@@ -82,7 +85,7 @@ function Nav({ active, onChange }) {
   const tabs = [
     { id:"home", icon:"🏠", label:"ホーム" },
     { id:"phrases", icon:"📚", label:"表現集" },
-    { id:"vocab", icon:"🔤", label:"語彙" },
+    { id:"roleplay", icon:"🎭", label:"会話" },
     { id:"quiz", icon:"✏️", label:"クイズ" },
     { id:"diary", icon:"📔", label:"日記" },
     { id:"goals", icon:"🎯", label:"目標" },
@@ -1107,6 +1110,462 @@ function Section({ title, color, children }) {
   );
 }
 
+// ===================== ROLEPLAY SCENARIOS =====================
+const ROLEPLAY_SCENARIOS = [
+  {
+    id:"rp1", category:"🤿 ダイビング", title:"受付・チェックイン",
+    description:"ダイビングショップのフロントでチェックインする",
+    difficulty:"初級",
+    systemPrompt:`You are a friendly diving shop receptionist. Eriko is a Japanese diver checking in. 
+Speak natural English, ask about her C-card, log book, and equipment rental needs.
+Keep responses short (2-3 sentences). Be warm and helpful.
+Start by greeting her and asking if she has a reservation.`
+  },
+  {
+    id:"rp2", category:"🤿 ダイビング", title:"ブリーフィングで質問する",
+    description:"ガイドのブリーフィングを聞いて質問・心配事を伝える",
+    difficulty:"中級",
+    systemPrompt:`You are a dive guide giving a briefing. Eriko is a Japanese diver (customer).
+Give a realistic dive briefing covering: visibility, current, entry style, max depth, safety stop, what to do if separated.
+After your briefing, invite questions. Respond naturally to her questions about the dive site.
+Keep each response to 3-4 sentences.`
+  },
+  {
+    id:"rp3", category:"🤿 ダイビング", title:"器材トラブルを伝える",
+    description:"タンクやウェイトの交換、体調不良を申し出る",
+    difficulty:"初級",
+    systemPrompt:`You are a helpful divemaster. Eriko is a diver who needs to report equipment issues or health concerns before a dive.
+Respond naturally to her requests about tank exchange, weight adjustment, or skipping a dive.
+Be understanding and helpful. Keep responses to 2-3 sentences.
+Start by asking if everything is okay with her equipment.`
+  },
+  {
+    id:"rp4", category:"💼 職場", title:"会議でのやり取り",
+    description:"社内ミーティングで意見を述べる・質問する",
+    difficulty:"中級",
+    systemPrompt:`You are a colleague in an international business meeting. Eriko is a Japanese pharmaceutical regulatory affairs professional.
+Discuss topics like project updates, timelines, or regulatory submissions.
+Keep responses conversational and to 2-3 sentences. Ask her opinion or questions to keep the conversation going.
+Start by welcoming her to the meeting and asking for her update.`
+  },
+  {
+    id:"rp5", category:"💼 職場", title:"メールの内容を確認する",
+    description:"送ったメールについて電話やチャットでフォローアップ",
+    difficulty:"中級",
+    systemPrompt:`You are a business contact from an overseas company. Eriko sent you an email about a regulatory matter and is following up.
+Discuss the email content naturally. Ask clarifying questions about timelines, documents, or next steps.
+Keep responses to 2-3 sentences.
+Start by saying you received her email and you have a few questions.`
+  },
+  {
+    id:"rp6", category:"🏛️ 規制当局", title:"当局への面会申し込み",
+    description:"規制当局にアポイントを取る",
+    difficulty:"上級",
+    systemPrompt:`You are an official at a regulatory authority (like Thai FDA or PMDA). Eriko is requesting a meeting to discuss a product dossier submission.
+Be professional and formal. Ask about the purpose of the meeting, documents to be discussed, and preferred dates.
+Keep responses to 2-3 sentences.
+Start by answering the phone formally.`
+  },
+  {
+    id:"rp7", category:"🏛️ 規制当局", title:"審査結果について話し合う",
+    description:"リジェクションの理由を確認し、次のステップを相談する",
+    difficulty:"上級",
+    systemPrompt:`You are a regulatory official discussing a product review outcome with Eriko, a regulatory affairs professional.
+The product received a rejection. Discuss the reasons for rejection, what additional data is needed, and possible timelines for resubmission.
+Be professional but approachable. Keep responses to 3-4 sentences.
+Start by summarizing the main reason for the rejection.`
+  },
+  {
+    id:"rp8", category:"🎪 展示会", title:"CPHIブースでの会話",
+    description:"展示会で来場者と製品について話す",
+    difficulty:"中級",
+    systemPrompt:`You are a visitor at CPHI (pharmaceutical exhibition) stopping by Eriko's company booth.
+Ask about her company's products, services, or regulatory expertise. Show genuine interest.
+Keep responses to 2-3 sentences. Be friendly and professional.
+Start by introducing yourself and saying you're interested in her company's products.`
+  },
+  {
+    id:"rp9", category:"🎪 展示会", title:"名刺交換・自己紹介",
+    description:"展示会で初めて会う人と自己紹介・名刺交換をする",
+    difficulty:"初級",
+    systemPrompt:`You are a business professional at a pharmaceutical exhibition meeting Eriko for the first time.
+Exchange introductions, ask about her role and company, and discuss potential collaboration.
+Keep responses short and friendly (2-3 sentences).
+Start by introducing yourself and extending your hand to shake.`
+  },
+  {
+    id:"rp10", category:"💬 日常", title:"レストランで注文する",
+    description:"海外のレストランで注文・質問をする",
+    difficulty:"初級",
+    systemPrompt:`You are a waiter at an English-speaking restaurant. Eriko is a Japanese customer.
+Take her order, answer questions about the menu, and handle any requests naturally.
+Keep responses to 2-3 sentences.
+Start by welcoming her and handing her a menu.`
+  },
+  {
+    id:"rp11", category:"💬 日常", title:"ホテルのチェックイン",
+    description:"海外ホテルでチェックインする",
+    difficulty:"初級",
+    systemPrompt:`You are a hotel front desk staff member. Eriko is checking in as a guest.
+Handle the check-in process: confirm reservation, ask for ID, explain amenities, answer questions.
+Keep responses to 2-3 sentences.
+Start by greeting her and asking for her name.`
+  },
+  {
+    id:"rp12", category:"💬 日常", title:"空港・交通機関でのやり取り",
+    description:"空港や電車で道を聞く・チケットを買う",
+    difficulty:"初級",
+    systemPrompt:`You are an airport or transit staff member. Eriko needs help navigating or buying tickets.
+Help her with directions, ticket purchases, or transit information.
+Keep responses to 2-3 sentences.
+Start by asking how you can help her.`
+  },
+];
+
+// ===================== ROLEPLAY TAB =====================
+function RoleplayTab() {
+  const [mode, setMode] = useState("list"); // list | play | result
+  const [selected, setSelected] = useState(null);
+  const [feedbackMode, setFeedbackMode] = useState("normal"); // normal | practice
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [feedback, setFeedback] = useState(null);
+  const [customScenarios, setCustomScenarios] = useState(() => load("eriko_custom_scenarios", []));
+  const [showAddScenario, setShowAddScenario] = useState(false);
+  const [newScenario, setNewScenario] = useState({ title:"", category:"💬 日常", description:"", difficulty:"中級", systemPrompt:"" });
+  const [filterCat, setFilterCat] = useState("すべて");
+  const messagesEndRef = useRef(null);
+
+  const allScenarios = [...ROLEPLAY_SCENARIOS, ...customScenarios];
+  const categories = ["すべて", "🤿 ダイビング", "💼 職場", "🏛️ 規制当局", "🎪 展示会", "💬 日常"];
+  const filtered = filterCat === "すべて" ? allScenarios : allScenarios.filter(s => s.category === filterCat);
+
+  useEffect(() => { save("eriko_custom_scenarios", customScenarios); }, [customScenarios]);
+  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior:"smooth" }); }, [messages]);
+
+  async function startScenario(scenario) {
+    setSelected(scenario);
+    setMessages([]);
+    setFeedback(null);
+    setInput("");
+    setLoading(true);
+    setMode("play");
+    try {
+      const res = await fetch("/api/chat", {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ system: scenario.systemPrompt, message: "Start the roleplay now. Begin with your opening line." })
+      });
+      const data = await res.json();
+      const text = data.content?.[0]?.text || "";
+      setMessages([{ role:"ai", text }]);
+    } catch {
+      setMessages([{ role:"ai", text:"Hello! Let's practice English together. How can I help you?" }]);
+    }
+    setLoading(false);
+  }
+
+  async function sendMessage() {
+    if (!input.trim() || loading) return;
+    const userMsg = input.trim();
+    setInput("");
+    const newMessages = [...messages, { role:"user", text:userMsg }];
+    setMessages(newMessages);
+    setLoading(true);
+
+    try {
+      // Build conversation history
+      const history = newMessages.map(m => ({ role: m.role === "ai" ? "assistant" : "user", content: m.text }));
+      
+      if (feedbackMode === "practice") {
+        // Real-time feedback mode
+        const feedbackSys = `${selected.systemPrompt}
+
+After the user's message, do TWO things:
+1. Continue the roleplay naturally (in character)
+2. Add a brief feedback note in Japanese at the end, formatted as: 
+【フィードバック】correct/natural phrasing suggestion if needed, or 「自然な英語です！」if it's good.`;
+        const res = await fetch("/api/chat", {
+          method:"POST", headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({ system: feedbackSys, message: history.map(h => `${h.role}: ${h.content}`).join("\n") })
+        });
+        const data = await res.json();
+        const text = data.content?.[0]?.text || "";
+        setMessages([...newMessages, { role:"ai", text }]);
+      } else {
+        // Normal mode - just continue roleplay
+        const res = await fetch("/api/chat", {
+          method:"POST", headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({ system: selected.systemPrompt, message: history.map(h => `${h.role}: ${h.content}`).join("\n") })
+        });
+        const data = await res.json();
+        const text = data.content?.[0]?.text || "";
+        setMessages([...newMessages, { role:"ai", text }]);
+      }
+    } catch {
+      setMessages([...newMessages, { role:"ai", text:"Sorry, could you repeat that?" }]);
+    }
+    setLoading(false);
+  }
+
+  async function endAndGetFeedback() {
+    setLoading(true);
+    try {
+      const conversation = messages.map(m => `${m.role === "ai" ? "AI" : "Eriko"}: ${m.text}`).join("\n");
+      const sys = `You are an English teacher reviewing a roleplay conversation.
+Analyze Eriko's English (the "Eriko:" lines) and provide feedback in Japanese.
+
+Return ONLY valid JSON:
+{
+  "overall": "総合評価コメント（日本語）",
+  "score": 1-10,
+  "strengths": ["良かった点1", "良かった点2"],
+  "improvements": [{"original":"Erikoの表現","better":"より良い表現","explanation":"説明"}],
+  "newPhrases": [{"english":"使えるフレーズ","japanese":"意味","context":"使う場面"}]
+}`;
+      const res = await fetch("/api/chat", {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ system: sys, message: conversation })
+      });
+      const data = await res.json();
+      const text = data.content?.[0]?.text || "";
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      if (jsonMatch) setFeedback(JSON.parse(jsonMatch[0]));
+    } catch {
+      setFeedback({ overall:"フィードバックの取得に失敗しました。", score:0, strengths:[], improvements:[], newPhrases:[] });
+    }
+    setLoading(false);
+    setMode("result");
+  }
+
+  const inp = { width:"100%", padding:"8px 10px", borderRadius:8, border:"1px solid #e2e8f0", fontSize:13, boxSizing:"border-box", outline:"none" };
+  const diffColor = d => d==="初級"?"#16a34a":d==="中級"?"#d97706":"#dc2626";
+  const diffBg = d => d==="初級"?"#f0fdf4":d==="中級"?"#fffbeb":"#fef2f2";
+
+  // Result screen
+  if (mode === "result" && feedback) return (
+    <div style={{ overflowY:"auto", padding:"14px 16px" }}>
+      <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14 }}>
+        <button onClick={()=>setMode("list")} style={{ background:"none", border:"none", cursor:"pointer", fontSize:20, color:"#64748b" }}>←</button>
+        <h3 style={{ margin:0, fontSize:16, fontWeight:800 }}>🎭 ロールプレイ結果</h3>
+      </div>
+
+      <div style={{ background:"linear-gradient(135deg,#7c3aed,#a855f7)", borderRadius:14, padding:16, marginBottom:14, color:"#fff", textAlign:"center" }}>
+        <div style={{ fontSize:40, fontWeight:800 }}>{feedback.score}<span style={{ fontSize:18 }}>/10</span></div>
+        <div style={{ fontSize:13, marginTop:6, opacity:0.9 }}>{feedback.overall}</div>
+      </div>
+
+      {feedback.strengths?.length > 0 && (
+        <Section title="✨ 良かった点" color="#16a34a">
+          {feedback.strengths.map((s,i) => <div key={i} style={{ fontSize:12, color:"#166534", marginBottom:4 }}>• {s}</div>)}
+        </Section>
+      )}
+
+      {feedback.improvements?.length > 0 && (
+        <Section title="💡 より良い表現" color="#d97706">
+          {feedback.improvements.map((item,i) => (
+            <div key={i} style={{ marginBottom:10, paddingBottom:10, borderBottom:i<feedback.improvements.length-1?"1px solid #f1f5f9":"none" }}>
+              <div style={{ fontSize:12, color:"#ef4444" }}>❌ {item.original}</div>
+              <div style={{ fontSize:12, color:"#16a34a" }}>✅ {item.better}</div>
+              <div style={{ fontSize:11, color:"#64748b", marginTop:3 }}>💡 {item.explanation}</div>
+            </div>
+          ))}
+        </Section>
+      )}
+
+      {feedback.newPhrases?.length > 0 && (
+        <Section title={`📚 使えるフレーズ (${feedback.newPhrases.length}件)`} color="#2563eb">
+          {feedback.newPhrases.map((p,i) => (
+            <div key={i} style={{ marginBottom:6, fontSize:12 }}>
+              <span style={{ fontWeight:700 }}>{p.english}</span>
+              <span style={{ color:"#64748b" }}> — {p.japanese}</span>
+              {p.context && <div style={{ fontSize:11, color:"#94a3b8" }}>{p.context}</div>}
+            </div>
+          ))}
+        </Section>
+      )}
+
+      <button onClick={()=>{ setMode("list"); setSelected(null); setMessages([]); setFeedback(null); }} style={{ width:"100%", padding:14, borderRadius:12, border:"none", background:"#7c3aed", color:"#fff", fontSize:15, fontWeight:700, cursor:"pointer", marginTop:8 }}>
+        シナリオ一覧に戻る
+      </button>
+    </div>
+  );
+
+  // Play screen
+  if (mode === "play" && selected) return (
+    <div style={{ display:"flex", flexDirection:"column", height:"100%" }}>
+      {/* Header */}
+      <div style={{ padding:"12px 16px", background:"#fff", borderBottom:"1px solid #e2e8f0", display:"flex", alignItems:"center", gap:10 }}>
+        <button onClick={()=>setMode("list")} style={{ background:"none", border:"none", cursor:"pointer", fontSize:20, color:"#64748b" }}>←</button>
+        <div style={{ flex:1 }}>
+          <div style={{ fontSize:13, fontWeight:700, color:"#1e293b" }}>{selected.title}</div>
+          <div style={{ fontSize:10, color:"#94a3b8" }}>{selected.category}</div>
+        </div>
+        <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+          <button onClick={()=>setFeedbackMode(m=>m==="normal"?"practice":"normal")} style={{
+            padding:"4px 8px", borderRadius:8, border:"none", cursor:"pointer", fontSize:10, fontWeight:700,
+            background: feedbackMode==="practice" ? "#7c3aed" : "#f1f5f9",
+            color: feedbackMode==="practice" ? "#fff" : "#64748b",
+          }}>
+            {feedbackMode==="practice" ? "練習モード" : "通常モード"}
+          </button>
+          <button onClick={endAndGetFeedback} disabled={loading || messages.length < 2} style={{
+            padding:"4px 10px", borderRadius:8, border:"none", cursor:"pointer", fontSize:11, fontWeight:700,
+            background: messages.length >= 2 ? "#16a34a" : "#e2e8f0",
+            color: messages.length >= 2 ? "#fff" : "#94a3b8",
+          }}>終了</button>
+        </div>
+      </div>
+
+      {/* Messages */}
+      <div style={{ flex:1, overflowY:"auto", padding:"12px 16px" }}>
+        {messages.map((m, i) => (
+          <div key={i} style={{ marginBottom:12, display:"flex", justifyContent: m.role==="user"?"flex-end":"flex-start" }}>
+            {m.role === "ai" && <div style={{ width:28, height:28, borderRadius:99, background:"#7c3aed", display:"flex", alignItems:"center", justifyContent:"center", fontSize:14, marginRight:8, flexShrink:0, marginTop:2 }}>🎭</div>}
+            <div style={{
+              maxWidth:"78%", padding:"10px 13px", borderRadius:14,
+              background: m.role==="user" ? "#2563eb" : "#fff",
+              color: m.role==="user" ? "#fff" : "#1e293b",
+              border: m.role==="ai" ? "1px solid #e2e8f0" : "none",
+              fontSize:13, lineHeight:1.6,
+              borderBottomRightRadius: m.role==="user" ? 4 : 14,
+              borderBottomLeftRadius: m.role==="ai" ? 4 : 14,
+            }}>
+              {m.text.split("【フィードバック】").map((part, pi) => (
+                <span key={pi} style={{ color: pi>0 ? "#7c3aed" : "inherit", fontSize: pi>0 ? 11 : 13, display: pi>0 ? "block" : "inline", marginTop: pi>0 ? 6 : 0, fontStyle: pi>0 ? "italic" : "normal" }}>
+                  {pi>0 ? "💡 " : ""}{part}
+                </span>
+              ))}
+            </div>
+          </div>
+        ))}
+        {loading && (
+          <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:12 }}>
+            <div style={{ width:28, height:28, borderRadius:99, background:"#7c3aed", display:"flex", alignItems:"center", justifyContent:"center", fontSize:14 }}>🎭</div>
+            <div style={{ background:"#fff", border:"1px solid #e2e8f0", borderRadius:14, borderBottomLeftRadius:4, padding:"10px 13px", fontSize:13, color:"#94a3b8" }}>入力中…</div>
+          </div>
+        )}
+        <div ref={messagesEndRef} />
+      </div>
+
+      {/* Hint */}
+      <div style={{ padding:"6px 16px", background:"#f8fafc", borderTop:"1px solid #f1f5f9" }}>
+        <div style={{ fontSize:10, color:"#94a3b8" }}>💡 ヒント: {selected.description}</div>
+      </div>
+
+      {/* Input */}
+      <div style={{ padding:"10px 16px", background:"#fff", borderTop:"1px solid #e2e8f0", display:"flex", gap:8 }}>
+        <input
+          value={input}
+          onChange={e=>setInput(e.target.value)}
+          onKeyDown={e=>{ if(e.key==="Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
+          placeholder="英語で入力してください…"
+          style={{ ...inp, flex:1 }}
+          disabled={loading}
+        />
+        <button onClick={sendMessage} disabled={loading||!input.trim()} style={{
+          padding:"8px 14px", borderRadius:8, border:"none",
+          background: input.trim() ? "#2563eb" : "#e2e8f0",
+          color: input.trim() ? "#fff" : "#94a3b8",
+          cursor:"pointer", fontSize:14, fontWeight:700, flexShrink:0,
+        }}>送信</button>
+      </div>
+    </div>
+  );
+
+  // List screen
+  return (
+    <div style={{ display:"flex", flexDirection:"column", height:"100%" }}>
+      <div style={{ padding:"14px 16px 0" }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
+          <h3 style={{ margin:0, fontSize:16, fontWeight:800 }}>🎭 ロールプレイ</h3>
+          <button onClick={()=>setShowAddScenario(true)} style={{ background:"#7c3aed", border:"none", borderRadius:8, padding:"5px 10px", fontSize:11, cursor:"pointer", color:"#fff", fontWeight:600 }}>＋自作</button>
+        </div>
+
+        {/* Mode selector */}
+        <div style={{ background:"#f8fafc", borderRadius:10, padding:10, marginBottom:10, border:"1px solid #e2e8f0" }}>
+          <div style={{ fontSize:11, fontWeight:700, color:"#475569", marginBottom:6 }}>フィードバックモード</div>
+          <div style={{ display:"flex", gap:8 }}>
+            {[["normal","通常（終了後まとめて）"],["practice","練習（リアルタイム指摘）"]].map(([v,l])=>(
+              <button key={v} onClick={()=>setFeedbackMode(v)} style={{
+                flex:1, padding:"6px 0", borderRadius:8, border:"2px solid " + (feedbackMode===v?"#7c3aed":"#e2e8f0"),
+                background: feedbackMode===v?"#f5f3ff":"#fff", cursor:"pointer", fontSize:10, fontWeight:feedbackMode===v?700:400,
+                color: feedbackMode===v?"#7c3aed":"#64748b",
+              }}>{l}</button>
+            ))}
+          </div>
+        </div>
+
+        {/* Category filter */}
+        <div style={{ display:"flex", gap:5, overflowX:"auto", paddingBottom:8 }}>
+          {categories.map(c=>(
+            <button key={c} onClick={()=>setFilterCat(c)} style={{
+              padding:"3px 10px", borderRadius:99, border:"none", cursor:"pointer", whiteSpace:"nowrap",
+              fontSize:11, fontWeight:600,
+              background: filterCat===c ? "#7c3aed" : "#f1f5f9",
+              color: filterCat===c ? "#fff" : "#64748b",
+            }}>{c}</button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ flex:1, overflowY:"auto", padding:"4px 16px 16px" }}>
+        <div style={{ fontSize:11, color:"#94a3b8", marginBottom:8 }}>{filtered.length}シナリオ</div>
+        {filtered.map(s=>(
+          <div key={s.id} onClick={()=>startScenario(s)} style={{
+            background:"#fff", border:"1px solid #e2e8f0", borderRadius:12, marginBottom:8, padding:"12px 14px", cursor:"pointer",
+            display:"flex", alignItems:"center", gap:12,
+          }}>
+            <div style={{ flex:1 }}>
+              <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:4 }}>
+                <span style={{ fontSize:9, padding:"2px 7px", borderRadius:99, background:diffBg(s.difficulty), color:diffColor(s.difficulty), fontWeight:700 }}>{s.difficulty}</span>
+                <span style={{ fontSize:10, color:"#94a3b8" }}>{s.category}</span>
+              </div>
+              <div style={{ fontSize:14, fontWeight:700, color:"#1e293b", marginBottom:2 }}>{s.title}</div>
+              <div style={{ fontSize:11, color:"#64748b" }}>{s.description}</div>
+            </div>
+            <div style={{ fontSize:18, color:"#cbd5e1" }}>▶</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Add custom scenario modal */}
+      {showAddScenario && (
+        <Modal onClose={()=>setShowAddScenario(false)}>
+          <h4 style={{ margin:"0 0 12px", fontSize:15 }}>シナリオを自作</h4>
+          <Field label="タイトル"><input value={newScenario.title} onChange={e=>setNewScenario(s=>({...s,title:e.target.value}))} placeholder="例: 医師との面談" style={inp} /></Field>
+          <Field label="カテゴリー">
+            <select value={newScenario.category} onChange={e=>setNewScenario(s=>({...s,category:e.target.value}))} style={inp}>
+              {["🤿 ダイビング","💼 職場","🏛️ 規制当局","🎪 展示会","💬 日常"].map(c=><option key={c}>{c}</option>)}
+            </select>
+          </Field>
+          <Field label="説明"><input value={newScenario.description} onChange={e=>setNewScenario(s=>({...s,description:e.target.value}))} placeholder="このシナリオの説明" style={inp} /></Field>
+          <Field label="難易度">
+            <div style={{ display:"flex", gap:6 }}>
+              {["初級","中級","上級"].map(d=>(
+                <button key={d} onClick={()=>setNewScenario(s=>({...s,difficulty:d}))} style={{ flex:1, padding:"6px 0", borderRadius:8, border:"none", cursor:"pointer", fontSize:12, fontWeight:700, background:newScenario.difficulty===d?diffColor(d):"#f1f5f9", color:newScenario.difficulty===d?"#fff":diffColor(d) }}>{d}</button>
+              ))}
+            </div>
+          </Field>
+          <Field label="AIへの指示（英語で）">
+            <textarea value={newScenario.systemPrompt} onChange={e=>setNewScenario(s=>({...s,systemPrompt:e.target.value}))} placeholder="You are a... Start by..." style={{ ...inp, height:80, resize:"none", fontFamily:"inherit" }} />
+          </Field>
+          <ModalButtons
+            onCancel={()=>setShowAddScenario(false)}
+            onOk={()=>{
+              if(!newScenario.title.trim()) return;
+              setCustomScenarios(prev=>[...prev, {...newScenario, id:uid()}]);
+              setNewScenario({ title:"", category:"💬 日常", description:"", difficulty:"中級", systemPrompt:"" });
+              setShowAddScenario(false);
+            }}
+            okLabel="追加する"
+          />
+        </Modal>
+      )}
+    </div>
+  );
+}
+
 // ===================== MAIN =====================
 export default function App() {
   const [tab, setTab] = useState("home");
@@ -1129,6 +1588,7 @@ export default function App() {
       case "vocab": return <VocabTab vocab={vocab} setVocab={setVocab} />;
       case "quiz": return <QuizTab phrases={phrases} vocab={vocab} setProgress={setProgress} weaknesses={weaknesses} setWeaknesses={setWeaknesses} />;
       case "diary": return <DiaryTab setPhrases={setPhrases} weaknesses={weaknesses} />;
+      case "roleplay": return <RoleplayTab />;
       case "goals": return <GoalsTab goals={goals} setGoals={setGoals} progress={progress} weaknesses={weaknesses} phrases={phrases} vocab={vocab} />;
       default: return null;
     }
@@ -1140,5 +1600,4 @@ export default function App() {
       <Nav active={tab} onChange={setTab} />
     </div>
   );
-
-‹‹
+}
