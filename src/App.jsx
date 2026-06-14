@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import mammoth from "mammoth";
 
 // ===================== CONSTANTS =====================
 const STORAGE = {
@@ -209,13 +210,41 @@ function PhrasesTab({ phrases, setPhrases }) {
     return true;
   });
 
+  // ✅ 修正済み：.docx は mammoth で、.txt は文字化け自動判定
   function handleMultiFileSelect(e) {
     const files = Array.from(e.target.files);
+
     const readers = files.map(file => new Promise(resolve => {
-      const r = new FileReader();
-      r.onload = ev => resolve({ name: file.name, text: ev.target.result });
-      r.readAsText(file, "UTF-8");
+      if (file.name.endsWith(".docx")) {
+        // .docx ファイルは mammoth でテキスト抽出
+        const r = new FileReader();
+        r.onload = async ev => {
+          try {
+            const arrayBuffer = ev.target.result;
+            const result = await mammoth.extractRawText({ arrayBuffer });
+            resolve({ name: file.name, text: result.value });
+          } catch {
+            resolve({ name: file.name, text: "" });
+          }
+        };
+        r.readAsArrayBuffer(file);
+      } else {
+        // .txt ファイルはエンコーディング自動判定（UTF-8 → Shift-JIS フォールバック）
+        const r = new FileReader();
+        r.onload = ev => {
+          let text = ev.target.result;
+          if ((text.match(/\uFFFD/g) || []).length > 5) {
+            const r2 = new FileReader();
+            r2.onload = ev2 => resolve({ name: file.name, text: ev2.target.result });
+            r2.readAsText(file, "Shift-JIS");
+          } else {
+            resolve({ name: file.name, text });
+          }
+        };
+        r.readAsText(file, "UTF-8");
+      }
     }));
+
     Promise.all(readers).then(results => {
       setImportFiles(results);
       const combined = results.map(f => f.text).join("\n\n");
@@ -374,7 +403,7 @@ Rules: 初級=simple everyday business phrases, 中級=moderately complex, 上�
                 <span style={{ fontSize:20 }}>📂</span>
                 <div>
                   <div style={{ fontSize:13, fontWeight:700, color:"#2563eb" }}>ファイルを選択（複数可）</div>
-                  <div style={{ fontSize:11, color:"#64748b" }}>.docx を変換した .txt ファイルに対応</div>
+                  <div style={{ fontSize:11, color:"#64748b" }}>.docx / .txt に対応</div>
                 </div>
                 <input type="file" accept=".txt,.docx" multiple onChange={handleMultiFileSelect} style={{ display:"none" }} />
               </label>
@@ -786,7 +815,6 @@ Respond ONLY in this exact JSON format with no extra text before or after:
   "weakPoints": ["weakness 1","weakness 2"]
 }`;
       const resp = await callClaude(sys, draft);
-      // More robust JSON extraction
       const jsonMatch = resp.match(/\{[\s\S]*\}/);
       if (!jsonMatch) throw new Error("No JSON found");
       const result = JSON.parse(jsonMatch[0]);
@@ -1224,9 +1252,9 @@ Start by asking how you can help her.`
 
 // ===================== ROLEPLAY TAB =====================
 function RoleplayTab() {
-  const [mode, setMode] = useState("list"); // list | play | result
+  const [mode, setMode] = useState("list");
   const [selected, setSelected] = useState(null);
-  const [feedbackMode, setFeedbackMode] = useState("normal"); // normal | practice
+  const [feedbackMode, setFeedbackMode] = useState("normal");
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -1252,13 +1280,11 @@ function RoleplayTab() {
     setLoading(true);
     setMode("play");
     try {
-      const res = await fetch("/api/chat", {
-        method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ system: scenario.systemPrompt, message: "Start the roleplay now. Begin with your opening line." })
-      });
-      const data = await res.json();
-      const text = data.content?.[0]?.text || "";
-      setMessages([{ role:"ai", text }]);
+      const resp = await callClaude(
+        scenario.systemPrompt,
+        "Start the roleplay now. Begin with your opening line."
+      );
+      setMessages([{ role:"ai", text: resp }]);
     } catch {
       setMessages([{ role:"ai", text:"Hello! Let's practice English together. How can I help you?" }]);
     }
@@ -1274,33 +1300,20 @@ function RoleplayTab() {
     setLoading(true);
 
     try {
-      // Build conversation history
-      const history = newMessages.map(m => ({ role: m.role === "ai" ? "assistant" : "user", content: m.text }));
-      
+      const history = newMessages.map(m => `${m.role === "ai" ? "assistant" : "user"}: ${m.text}`).join("\n");
+
       if (feedbackMode === "practice") {
-        // Real-time feedback mode
         const feedbackSys = `${selected.systemPrompt}
 
 After the user's message, do TWO things:
 1. Continue the roleplay naturally (in character)
 2. Add a brief feedback note in Japanese at the end, formatted as: 
 【フィードバック】correct/natural phrasing suggestion if needed, or 「自然な英語です！」if it's good.`;
-        const res = await fetch("/api/chat", {
-          method:"POST", headers:{"Content-Type":"application/json"},
-          body: JSON.stringify({ system: feedbackSys, message: history.map(h => `${h.role}: ${h.content}`).join("\n") })
-        });
-        const data = await res.json();
-        const text = data.content?.[0]?.text || "";
-        setMessages([...newMessages, { role:"ai", text }]);
+        const resp = await callClaude(feedbackSys, history);
+        setMessages([...newMessages, { role:"ai", text: resp }]);
       } else {
-        // Normal mode - just continue roleplay
-        const res = await fetch("/api/chat", {
-          method:"POST", headers:{"Content-Type":"application/json"},
-          body: JSON.stringify({ system: selected.systemPrompt, message: history.map(h => `${h.role}: ${h.content}`).join("\n") })
-        });
-        const data = await res.json();
-        const text = data.content?.[0]?.text || "";
-        setMessages([...newMessages, { role:"ai", text }]);
+        const resp = await callClaude(selected.systemPrompt, history);
+        setMessages([...newMessages, { role:"ai", text: resp }]);
       }
     } catch {
       setMessages([...newMessages, { role:"ai", text:"Sorry, could you repeat that?" }]);
@@ -1323,13 +1336,8 @@ Return ONLY valid JSON:
   "improvements": [{"original":"Erikoの表現","better":"より良い表現","explanation":"説明"}],
   "newPhrases": [{"english":"使えるフレーズ","japanese":"意味","context":"使う場面"}]
 }`;
-      const res = await fetch("/api/chat", {
-        method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ system: sys, message: conversation })
-      });
-      const data = await res.json();
-      const text = data.content?.[0]?.text || "";
-      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      const resp = await callClaude(sys, conversation);
+      const jsonMatch = resp.match(/\{[\s\S]*\}/);
       if (jsonMatch) setFeedback(JSON.parse(jsonMatch[0]));
     } catch {
       setFeedback({ overall:"フィードバックの取得に失敗しました。", score:0, strengths:[], improvements:[], newPhrases:[] });
@@ -1342,25 +1350,21 @@ Return ONLY valid JSON:
   const diffColor = d => d==="初級"?"#16a34a":d==="中級"?"#d97706":"#dc2626";
   const diffBg = d => d==="初級"?"#f0fdf4":d==="中級"?"#fffbeb":"#fef2f2";
 
-  // Result screen
   if (mode === "result" && feedback) return (
     <div style={{ overflowY:"auto", padding:"14px 16px" }}>
       <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14 }}>
         <button onClick={()=>setMode("list")} style={{ background:"none", border:"none", cursor:"pointer", fontSize:20, color:"#64748b" }}>←</button>
         <h3 style={{ margin:0, fontSize:16, fontWeight:800 }}>🎭 ロールプレイ結果</h3>
       </div>
-
       <div style={{ background:"linear-gradient(135deg,#7c3aed,#a855f7)", borderRadius:14, padding:16, marginBottom:14, color:"#fff", textAlign:"center" }}>
         <div style={{ fontSize:40, fontWeight:800 }}>{feedback.score}<span style={{ fontSize:18 }}>/10</span></div>
         <div style={{ fontSize:13, marginTop:6, opacity:0.9 }}>{feedback.overall}</div>
       </div>
-
       {feedback.strengths?.length > 0 && (
         <Section title="✨ 良かった点" color="#16a34a">
           {feedback.strengths.map((s,i) => <div key={i} style={{ fontSize:12, color:"#166534", marginBottom:4 }}>• {s}</div>)}
         </Section>
       )}
-
       {feedback.improvements?.length > 0 && (
         <Section title="💡 より良い表現" color="#d97706">
           {feedback.improvements.map((item,i) => (
@@ -1372,7 +1376,6 @@ Return ONLY valid JSON:
           ))}
         </Section>
       )}
-
       {feedback.newPhrases?.length > 0 && (
         <Section title={`📚 使えるフレーズ (${feedback.newPhrases.length}件)`} color="#2563eb">
           {feedback.newPhrases.map((p,i) => (
@@ -1384,17 +1387,14 @@ Return ONLY valid JSON:
           ))}
         </Section>
       )}
-
       <button onClick={()=>{ setMode("list"); setSelected(null); setMessages([]); setFeedback(null); }} style={{ width:"100%", padding:14, borderRadius:12, border:"none", background:"#7c3aed", color:"#fff", fontSize:15, fontWeight:700, cursor:"pointer", marginTop:8 }}>
         シナリオ一覧に戻る
       </button>
     </div>
   );
 
-  // Play screen
   if (mode === "play" && selected) return (
     <div style={{ display:"flex", flexDirection:"column", height:"100%" }}>
-      {/* Header */}
       <div style={{ padding:"12px 16px", background:"#fff", borderBottom:"1px solid #e2e8f0", display:"flex", alignItems:"center", gap:10 }}>
         <button onClick={()=>setMode("list")} style={{ background:"none", border:"none", cursor:"pointer", fontSize:20, color:"#64748b" }}>←</button>
         <div style={{ flex:1 }}>
@@ -1416,8 +1416,6 @@ Return ONLY valid JSON:
           }}>終了</button>
         </div>
       </div>
-
-      {/* Messages */}
       <div style={{ flex:1, overflowY:"auto", padding:"12px 16px" }}>
         {messages.map((m, i) => (
           <div key={i} style={{ marginBottom:12, display:"flex", justifyContent: m.role==="user"?"flex-end":"flex-start" }}>
@@ -1447,13 +1445,9 @@ Return ONLY valid JSON:
         )}
         <div ref={messagesEndRef} />
       </div>
-
-      {/* Hint */}
       <div style={{ padding:"6px 16px", background:"#f8fafc", borderTop:"1px solid #f1f5f9" }}>
         <div style={{ fontSize:10, color:"#94a3b8" }}>💡 ヒント: {selected.description}</div>
       </div>
-
-      {/* Input */}
       <div style={{ padding:"10px 16px", background:"#fff", borderTop:"1px solid #e2e8f0", display:"flex", gap:8 }}>
         <input
           value={input}
@@ -1473,7 +1467,6 @@ Return ONLY valid JSON:
     </div>
   );
 
-  // List screen
   return (
     <div style={{ display:"flex", flexDirection:"column", height:"100%" }}>
       <div style={{ padding:"14px 16px 0" }}>
@@ -1481,8 +1474,6 @@ Return ONLY valid JSON:
           <h3 style={{ margin:0, fontSize:16, fontWeight:800 }}>🎭 ロールプレイ</h3>
           <button onClick={()=>setShowAddScenario(true)} style={{ background:"#7c3aed", border:"none", borderRadius:8, padding:"5px 10px", fontSize:11, cursor:"pointer", color:"#fff", fontWeight:600 }}>＋自作</button>
         </div>
-
-        {/* Mode selector */}
         <div style={{ background:"#f8fafc", borderRadius:10, padding:10, marginBottom:10, border:"1px solid #e2e8f0" }}>
           <div style={{ fontSize:11, fontWeight:700, color:"#475569", marginBottom:6 }}>フィードバックモード</div>
           <div style={{ display:"flex", gap:8 }}>
@@ -1495,8 +1486,6 @@ Return ONLY valid JSON:
             ))}
           </div>
         </div>
-
-        {/* Category filter */}
         <div style={{ display:"flex", gap:5, overflowX:"auto", paddingBottom:8 }}>
           {categories.map(c=>(
             <button key={c} onClick={()=>setFilterCat(c)} style={{
@@ -1508,7 +1497,6 @@ Return ONLY valid JSON:
           ))}
         </div>
       </div>
-
       <div style={{ flex:1, overflowY:"auto", padding:"4px 16px 16px" }}>
         <div style={{ fontSize:11, color:"#94a3b8", marginBottom:8 }}>{filtered.length}シナリオ</div>
         {filtered.map(s=>(
@@ -1528,8 +1516,6 @@ Return ONLY valid JSON:
           </div>
         ))}
       </div>
-
-      {/* Add custom scenario modal */}
       {showAddScenario && (
         <Modal onClose={()=>setShowAddScenario(false)}>
           <h4 style={{ margin:"0 0 12px", fontSize:15 }}>シナリオを自作</h4>
