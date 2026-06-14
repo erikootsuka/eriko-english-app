@@ -1141,7 +1141,7 @@ export default function App() {
     </div>
   );
 }
-];
+
 
 // ===================== UTILS =====================
 const uid = () => "id" + Date.now() + Math.random().toString(36).slice(2,5);
