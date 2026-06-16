@@ -146,6 +146,49 @@ function loadPdfJs() {
   });
 }
 
+// ===================== DIARY QUIZ GENERATOR =====================
+// 日記の添削履歴からクイズ問題を生成する
+function buildDiaryQuizPool(diaryEntries) {
+  const pool = [];
+  diaryEntries.forEach(entry => {
+    // correctionsから「間違い→正解」のクイズを生成
+    (entry.corrections || []).forEach(c => {
+      if (c.original && c.corrected) {
+        pool.push({
+          id: `dq_${entry.id}_${uid()}`,
+          english: c.corrected,
+          japanese: c.explanation || "日記の添削より",
+          context: `日記 ${entry.date} の修正表現`,
+          level: "中級",
+          source: "日記履歴",
+          category: "日記表現",
+          // クイズ用の追加情報
+          diaryOriginal: c.original,
+          diaryDate: entry.date,
+          isDiaryItem: true,
+        });
+      }
+    });
+    // newPhrasesからも出題
+    (entry.newPhrases || []).forEach(p => {
+      if (p.english && p.japanese) {
+        pool.push({
+          id: `dp_${entry.id}_${uid()}`,
+          english: p.english,
+          japanese: p.japanese,
+          context: p.context || `日記 ${entry.date} の表現`,
+          level: p.level || "中級",
+          source: "日記履歴",
+          category: "日記表現",
+          diaryDate: entry.date,
+          isDiaryItem: true,
+        });
+      }
+    });
+  });
+  return pool;
+}
+
 // ===================== COMPONENTS =====================
 
 function Nav({ active, onChange }) {
@@ -755,10 +798,23 @@ function QuizTab({ phrases, vocab, setProgress, weaknesses, setWeaknesses }) {
   const [inputFeedback, setInputFeedback] = useState(null);
   const [checking, setChecking] = useState(false);
 
-  const allItems = source === "phrases" ? phrases : vocab.map(v => ({ ...v, english:v.word, japanese:v.meaning, context:v.example }));
+  // 日記データをlocalStorageから直接読み込む
+  const diaryEntries = load(STORAGE.diary, []);
+  const diaryPool = buildDiaryQuizPool(diaryEntries);
+
+  const allItems = source === "phrases"
+    ? phrases
+    : source === "vocab"
+    ? vocab.map(v => ({ ...v, english:v.word, japanese:v.meaning, context:v.example }))
+    : diaryPool;
 
   function startQuiz() {
-    let items = filterLv === "すべて" ? allItems : allItems.filter(p => p.level === filterLv);
+    let items = source === "diary"
+      ? diaryPool
+      : filterLv === "すべて" ? allItems : allItems.filter(p => p.level === filterLv);
+
+    if (items.length === 0) return;
+
     const weakIds = weaknesses.map(w => w.id);
     const weak = items.filter(p => weakIds.includes(p.id));
     const rest = items.filter(p => !weakIds.includes(p.id));
@@ -801,15 +857,31 @@ function QuizTab({ phrases, vocab, setProgress, weaknesses, setWeaknesses }) {
     <div style={{ padding:"20px 16px" }}>
       <h3 style={{ margin:"0 0 14px", fontSize:16, fontWeight:800 }}>✏️ クイズ</h3>
       <Field label="出題元">
-        <div style={{ display:"flex", gap:8 }}>
-          {[["phrases","表現集"],["vocab","語彙"]].map(([v,l]) => (<button key={v} onClick={() => setSource(v)} style={{ flex:1, padding:"8px 0", borderRadius:8, border:`2px solid ${source===v?C.primary:C.border}`, background:source===v?C.primaryLight:C.card, cursor:"pointer", fontSize:13, fontWeight:source===v?700:400, color:source===v?C.primary:C.muted }}>{l}</button>))}
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+          {[["phrases","📚 表現集"],["vocab","🔤 語彙"],["diary","📔 日記履歴"]].map(([v,l]) => (
+            <button key={v} onClick={() => setSource(v)} style={{
+              flex:1, minWidth:80, padding:"8px 4px", borderRadius:8,
+              border:`2px solid ${source===v?C.primary:C.border}`,
+              background:source===v?C.primaryLight:C.card,
+              cursor:"pointer", fontSize:12, fontWeight:source===v?700:400,
+              color:source===v?C.primary:C.muted,
+            }}>{l}</button>
+          ))}
         </div>
+        {source === "diary" && (
+          <div style={{ marginTop:8, padding:"8px 10px", background:C.purpleLight, borderRadius:8, fontSize:11, color:C.purple }}>
+            📔 日記の添削履歴から {diaryPool.length}件 出題できます。間違えた表現・追加フレーズが対象です。
+            {diaryPool.length === 0 && <span style={{ color:C.warn }}> まだ日記を書いていません。</span>}
+          </div>
+        )}
       </Field>
-      <Field label="レベル">
-        <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
-          {["すべて", ...LEVELS].map(l => (<button key={l} onClick={() => setFilterLv(l)} style={{ padding:"5px 12px", borderRadius:99, border:"none", cursor:"pointer", fontSize:12, fontWeight:600, background:filterLv===l?(l==="すべて"?C.slate:levelColor(l)):C.surface, color:filterLv===l?"#fff":(l==="すべて"?C.muted:levelColor(l)) }}>{l}</button>))}
-        </div>
-      </Field>
+      {source !== "diary" && (
+        <Field label="レベル">
+          <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+            {["すべて", ...LEVELS].map(l => (<button key={l} onClick={() => setFilterLv(l)} style={{ padding:"5px 12px", borderRadius:99, border:"none", cursor:"pointer", fontSize:12, fontWeight:600, background:filterLv===l?(l==="すべて"?C.slate:levelColor(l)):C.surface, color:filterLv===l?"#fff":(l==="すべて"?C.muted:levelColor(l)) }}>{l}</button>))}
+          </div>
+        </Field>
+      )}
       <Field label="出題形式">
         {[{id:"ja2en",l:"🇯🇵→🇬🇧 日本語→英語"},{id:"en2ja",l:"🇬🇧→🇯🇵 英語→日本語"},{id:"fillblank",l:"📝 穴埋め"}].map(t => (<button key={t.id} onClick={() => setQuizType(t.id)} style={{ width:"100%", marginBottom:6, padding:"10px 12px", borderRadius:10, textAlign:"left", border:`2px solid ${quizType===t.id?C.primary:C.border}`, background:quizType===t.id?C.primaryLight:C.card, cursor:"pointer", fontSize:13, fontWeight:quizType===t.id?700:400, color:quizType===t.id?C.primary:C.slate }}>{t.l}</button>))}
       </Field>
@@ -818,8 +890,12 @@ function QuizTab({ phrases, vocab, setProgress, weaknesses, setWeaknesses }) {
           {[["self","脳内確認"],["typing","タイピング"]].map(([v,l]) => (<button key={v} onClick={() => setInputMode(v)} style={{ flex:1, padding:"8px 0", borderRadius:8, border:`2px solid ${inputMode===v?C.purple:C.border}`, background:inputMode===v?C.purpleLight:C.card, cursor:"pointer", fontSize:13, fontWeight:inputMode===v?700:400, color:inputMode===v?C.purple:C.muted }}>{l}</button>))}
         </div>
       </Field>
-      {weaknesses.length > 0 && <div style={{ background:C.accentLight, border:`1px solid ${C.accentMid}`, borderRadius:10, padding:10, marginBottom:12, fontSize:12, color:"#9a3412" }}>⚠️ 苦手表現 {weaknesses.length}件を優先出題します</div>}
-      <button onClick={startQuiz} style={{ width:"100%", padding:14, borderRadius:12, border:"none", background:C.primary, color:"#fff", fontSize:15, fontWeight:700, cursor:"pointer" }}>スタート</button>
+      {weaknesses.length > 0 && source !== "diary" && <div style={{ background:C.accentLight, border:`1px solid ${C.accentMid}`, borderRadius:10, padding:10, marginBottom:12, fontSize:12, color:"#9a3412" }}>⚠️ 苦手表現 {weaknesses.length}件を優先出題します</div>}
+      <button
+        onClick={startQuiz}
+        disabled={source === "diary" && diaryPool.length === 0}
+        style={{ width:"100%", padding:14, borderRadius:12, border:"none", background: (source === "diary" && diaryPool.length === 0) ? C.subtle : C.primary, color:"#fff", fontSize:15, fontWeight:700, cursor:"pointer" }}
+      >スタート</button>
     </div>
   );
 
@@ -852,11 +928,17 @@ function QuizTab({ phrases, vocab, setProgress, weaknesses, setWeaknesses }) {
           <div style={{ width:(((idx+1)/pool.length)*100)+"%", height:"100%", background:C.primary, transition:"width 0.3s" }} />
         </div>
         <span style={{ fontSize:9, padding:"2px 6px", borderRadius:99, background:levelBg(p.level), color:levelColor(p.level), fontWeight:700 }}>{p.level}</span>
+        {p.isDiaryItem && <span style={{ fontSize:9, padding:"2px 6px", borderRadius:99, background:C.purpleLight, color:C.purple, fontWeight:700 }}>📔日記</span>}
       </div>
+
       <div style={{ background:C.surface, borderRadius:14, padding:20, minHeight:110, display:"flex", alignItems:"center", justifyContent:"center", textAlign:"center", marginBottom:quizType==="fillblank"?8:14, border:`1px solid ${C.border}` }}>
         <div>
           <div style={{ fontSize:11, color:C.subtle, marginBottom:8 }}>{quizType==="ja2en"?"次の日本語を英語で":quizType==="en2ja"?"次の英語の意味は？":"空欄に入る単語は？"}</div>
           <div style={{ fontSize:15, fontWeight:700, color:C.slate, lineHeight:1.5 }}>{question}</div>
+          {/* 日記クイズの場合、元の誤表現をヒントとして表示 */}
+          {p.isDiaryItem && p.diaryOriginal && quizType === "ja2en" && (
+            <div style={{ marginTop:8, fontSize:11, color:C.warn }}>❌ あなたの以前の表現: <em>{p.diaryOriginal}</em></div>
+          )}
         </div>
       </div>
 
@@ -990,6 +1072,11 @@ Rules:
     setLoadingMsg("");
   }
 
+  function deleteEntry(id) {
+    setEntries(prev => { const updated = prev.filter(e => e.id !== id); save(STORAGE.diary, updated); return updated; });
+    if (current?.id === id) setMode("list");
+  }
+
   if (mode === "write") return (
     <div style={{ padding:"16px", display:"flex", flexDirection:"column", height:"100%" }}>
       <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14 }}>
@@ -1026,7 +1113,11 @@ Rules:
     <div style={{ flex:1, overflowY:"auto", padding:"14px 16px" }}>
       <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14 }}>
         <button onClick={() => setMode("list")} style={{ background:"none", border:"none", cursor:"pointer", fontSize:20, color:C.muted }}>←</button>
-        <div><h3 style={{ margin:0, fontSize:16, fontWeight:800 }}>添削結果</h3><div style={{ fontSize:11, color:C.subtle }}>{current.date}</div></div>
+        <div style={{ flex:1 }}>
+          <h3 style={{ margin:0, fontSize:16, fontWeight:800 }}>添削結果</h3>
+          <div style={{ fontSize:11, color:C.subtle }}>{current.date}</div>
+        </div>
+        <button onClick={() => { if(window.confirm("この日記を削除しますか？")) deleteEntry(current.id); }} style={{ background:"none", border:`1px solid ${C.dangerMid}`, color:C.danger, borderRadius:8, padding:"4px 10px", fontSize:11, cursor:"pointer" }}>削除</button>
       </div>
       <Section title="✅ 修正後の日記" color={C.success}><div style={{ fontSize:13, lineHeight:1.8, color:C.slate }}>{current.corrected}</div></Section>
       {current.corrections?.length > 0 && (
