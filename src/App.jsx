@@ -240,6 +240,14 @@ function HomeTab({ phrases, vocab, progress, goals, onNavigate }) {
   const activeGoal = goals.find(g=>!g.completed);
   const levelCounts = { 初級:0, 中級:0, 上級:0 };
   phrases.forEach(p => levelCounts[p.level] = (levelCounts[p.level]||0)+1);
+function HomeTab({ phrases, vocab, progress, goals, onNavigate }) {
+  const t = today();
+  const todayCount = progress.filter(p => p.date===t).length;
+  const streak = getStreak(progress);
+  const mastered = [...new Set(progress.filter(p=>p.correct).map(p=>p.id))].length;
+  const activeGoal = goals.find(g=>!g.completed);
+  const levelCounts = { 初級:0, 中級:0, 上級:0 };
+  phrases.forEach(p => levelCounts[p.level] = (levelCounts[p.level]||0)+1);
 
   return (
     <div style={{ padding:"20px 16px", display:"flex", flexDirection:"column", gap:16 }}>
@@ -1235,8 +1243,8 @@ function RoleplayTab() {
         </Modal>
       )}
     </div>
-  );
-}
+    ); }
+
 // ===================== MAIN =====================
 export default function App() {
   const [tab, setTab] = useState("home");
