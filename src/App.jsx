@@ -9,6 +9,8 @@ const STORAGE = {
   progress: "eriko_progress_v2",
   diary: "eriko_diary_v2",
   weaknesses: "eriko_weaknesses_v2",
+  phraseOfWeek: "eriko_phrase_of_week",
+  learningCalendar: "eriko_learning_calendar",
 };
 
 const LEVELS = ["初級", "中級", "上級"];
@@ -17,7 +19,15 @@ const VOCAB_CATS = ["すべて", "一般", "医薬品", "規制", "ビジネス"
 const PARTS = ["名詞", "動詞", "形容詞", "副詞", "イディオム", "フレーズ"];
 
 // ===================== VERSION =====================
-const BUILD_VERSION = "2026-06-18";
+const BUILD_VERSION = "2026-06-18-p3";
+
+// ===================== WEEK KEY =====================
+function getWeekKey() {
+  const now = new Date();
+  const startOfYear = new Date(now.getFullYear(), 0, 1);
+  const weekNum = Math.ceil(((now - startOfYear) / 86400000 + startOfYear.getDay() + 1) / 7);
+  return `${now.getFullYear()}-W${String(weekNum).padStart(2, "0")}`;
+}
 
 // ===================== DESIGN TOKENS =====================
 const C = {
@@ -243,10 +253,36 @@ function HomeTab({ phrases, vocab, progress, goals, onNavigate }) {
   const levelCounts = { 初級:0, 中級:0, 上級:0 };
   phrases.forEach(p => levelCounts[p.level] = (levelCounts[p.level]||0)+1);
 
+  // ---- 今週の一言フレーズ ----
+  const [phraseOfWeek, setPhraseOfWeek] = useState(() => load(STORAGE.phraseOfWeek, null));
+  const [powLoading, setPowLoading] = useState(false);
+
+  useEffect(() => {
+    const weekKey = getWeekKey();
+    if (phrases.length === 0) return;
+    if (phraseOfWeek && phraseOfWeek.weekKey === weekKey) return;
+    fetchPhraseOfWeek();
+  }, [phrases.length]);
+
+  async function fetchPhraseOfWeek() {
+    if (phrases.length === 0) return;
+    setPowLoading(true);
+    try {
+      const weekKey = getWeekKey();
+      const sample = phrases.slice(0, 30).map(p => ({ english: p.english, japanese: p.japanese, level: p.level }));
+      const sys = `You are an English learning coach for Eriko, a Japanese pharmaceutical regulatory affairs professional. From the provided phrase list, select ONE phrase that would be most useful and interesting to focus on this week. Consider variety - don't pick the same type every time. Return ONLY valid JSON: {"english":"the phrase","japanese":"日本語訳","level":"初級|中級|上級","reason":"なぜこのフレーズを選んだか（日本語で1文）","usageTip":"このフレーズを使うシチュエーションのコツ（日本語で1文）"}`;
+      const resp = await callClaude(sys, JSON.stringify(sample));
+      const m = resp.match(/\{[\s\S]*\}/);
+      if (m) {
+        const data = { ...JSON.parse(m[0]), weekKey };
+        setPhraseOfWeek(data);
+        save(STORAGE.phraseOfWeek, data);
+      }
+    } catch {}
+    setPowLoading(false);
+  }
+
   return (
-    <div style={{ padding:"20px 16px", display:"flex", flexDirection:"column", gap:16 }}>
-      <div style={{ display:"flex", alignItems:"center", gap:12 }}>
-        <div style={{
           width:44, height:44, borderRadius:12,
           background:`linear-gradient(135deg, ${C.primary}, ${C.accent})`,
           display:"flex", alignItems:"center", justifyContent:"center",
@@ -300,6 +336,33 @@ function HomeTab({ phrases, vocab, progress, goals, onNavigate }) {
           <div style={{ fontSize:11, color:C.primaryDark, marginTop:4 }}>{activeGoal.current} / {activeGoal.target} {activeGoal.unit}</div>
         </div>
       )}
+
+      {/* ---- 今週の一言フレーズ ---- */}
+      <div style={{ background:`linear-gradient(135deg,#0c4a6e,${C.primary})`, borderRadius:14, padding:16, color:"#fff", position:"relative", overflow:"hidden" }}>
+        <div style={{ position:"absolute", top:-10, right:-10, fontSize:60, opacity:0.08 }}>💬</div>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+          <div style={{ fontSize:11, fontWeight:700, color:"#bae6fd" }}>💬 今週の一言フレーズ <span style={{ fontSize:9, opacity:0.7 }}>{getWeekKey()}</span></div>
+          <button onClick={() => fetchPhraseOfWeek(true)} disabled={powLoading || phrases.length===0} style={{ background:"rgba(255,255,255,0.15)", border:"none", borderRadius:6, padding:"3px 8px", color:"#fff", fontSize:10, cursor:"pointer", fontWeight:600 }}>{powLoading ? "更新中…" : "🔄 更新"}</button>
+        </div>
+        {powLoading && !phraseOfWeek && (
+          <div style={{ textAlign:"center", padding:"12px 0", fontSize:12, color:"#bae6fd", opacity:0.8 }}>AIが今週のフレーズを選んでいます…</div>
+        )}
+        {phraseOfWeek && !powLoading && (
+          <>
+            <div style={{ fontSize:15, fontWeight:800, lineHeight:1.5, marginBottom:4 }}>{phraseOfWeek.english}</div>
+            <div style={{ fontSize:12, color:"#bae6fd", marginBottom:8 }}>{phraseOfWeek.japanese}</div>
+            {phraseOfWeek.reason && <div style={{ fontSize:11, color:"rgba(255,255,255,0.75)", marginBottom:4 }}>📌 {phraseOfWeek.reason}</div>}
+            {phraseOfWeek.usageTip && <div style={{ fontSize:11, color:"rgba(255,255,255,0.75)", marginBottom:10 }}>💡 {phraseOfWeek.usageTip}</div>}
+            <div style={{ display:"flex", gap:8 }}>
+              <button onClick={() => onNavigate("diary")} style={{ flex:1, padding:"6px 0", borderRadius:8, border:"none", background:"rgba(255,255,255,0.2)", color:"#fff", fontSize:11, fontWeight:700, cursor:"pointer" }}>📔 日記で使う</button>
+              <button onClick={() => onNavigate("roleplay")} style={{ flex:1, padding:"6px 0", borderRadius:8, border:"none", background:"rgba(255,255,255,0.2)", color:"#fff", fontSize:11, fontWeight:700, cursor:"pointer" }}>🎭 会話で練習</button>
+            </div>
+          </>
+        )}
+        {!phraseOfWeek && !powLoading && phrases.length === 0 && (
+          <div style={{ fontSize:12, color:"#bae6fd", textAlign:"center", padding:"8px 0" }}>表現集にフレーズを追加すると表示されます</div>
+        )}
+      </div>
 
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
         {[
@@ -1327,6 +1390,9 @@ function GoalsTab({ goals, setGoals, progress, weaknesses, phrases, vocab }) {
           {last7.map(d => { const cnt = byDate[d]||0; const max = Math.max(1, ...last7.map(x => byDate[x]||0)); return (<div key={d} style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", gap:3 }}><div style={{ width:"100%", height:Math.max(4,(cnt/max)*50)+"px", background:d===t?C.primary:C.primaryMid, borderRadius:"4px 4px 0 0", transition:"height 0.3s" }} /><div style={{ fontSize:8, color:C.subtle }}>{d.slice(5)}</div></div>); })}
         </div>
       </div>
+
+      {/* ---- 学習カレンダー ---- */}
+      <LearningCalendar progress={progress} />
       {weaknesses.length > 0 && (<div style={{ background:C.accentLight, border:`1px solid ${C.accentMid}`, borderRadius:12, padding:14, marginBottom:14 }}><div style={{ fontSize:11, fontWeight:700, color:"#9a3412", marginBottom:8 }}>⚠️ 苦手表現 TOP{Math.min(5, weaknesses.length)}</div>{weaknesses.slice(0,5).map(w => (<div key={w.id} style={{ fontSize:12, color:"#92400e", marginBottom:4 }}>• {w.english} <span style={{ color:C.accent }}>({w.count}回ミス)</span></div>))}</div>)}
       {goals.filter(g => !g.completed).map(g => { const pct = Math.min(100, Math.round((g.current/g.target)*100)); return (
         <div key={g.id} style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:12, padding:14, marginBottom:10 }}>
@@ -1356,6 +1422,91 @@ function GoalsTab({ goals, setGoals, progress, weaknesses, phrases, vocab }) {
           <ModalButtons onCancel={() => setShowAdd(false)} onOk={() => { if(!newG.title.trim())return; setGoals(p => [{...newG,id:uid(),current:0,completed:false,createdDate:today()},...p]); setNewG({title:"",target:30,unit:"表現",deadline:""}); setShowAdd(false); }} okLabel="追加する" />
         </Modal>
       )}
+    </div>
+  );
+}
+
+// ===================== LEARNING CALENDAR =====================
+function LearningCalendar({ progress }) {
+  const [viewMonth, setViewMonth] = useState(() => {
+    const n = new Date(); return { year: n.getFullYear(), month: n.getMonth() };
+  });
+
+  const { year, month } = viewMonth;
+  const firstDay = new Date(year, month, 1).getDay(); // 0=Sun
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const todayStr = today();
+
+  // 日別学習カウント
+  const byDate = {};
+  progress.forEach(p => { byDate[p.date] = (byDate[p.date] || 0) + 1; });
+
+  // 日記データ
+  const diaryEntries = load(STORAGE.diary, []);
+  const diaryDates = new Set(diaryEntries.map(e => e.date));
+
+  const monthLabel = `${year}年${month + 1}月`;
+  const dayLabels = ["日","月","火","水","木","金","土"];
+
+  function intensity(count) {
+    if (!count) return "transparent";
+    if (count <= 2) return C.primaryLight;
+    if (count <= 5) return C.primaryMid;
+    if (count <= 10) return C.primary;
+    return C.primaryDark;
+  }
+
+  const cells = [];
+  // 空白セル
+  for (let i = 0; i < firstDay; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+
+  return (
+    <div style={{ background:C.card, borderRadius:12, padding:14, marginBottom:14, border:`1px solid ${C.border}` }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
+        <div style={{ fontSize:11, fontWeight:700, color:C.mid }}>📅 学習カレンダー</div>
+        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+          <button onClick={() => setViewMonth(v => { const d = new Date(v.year, v.month - 1); return { year: d.getFullYear(), month: d.getMonth() }; })} style={{ background:"none", border:"none", cursor:"pointer", fontSize:16, color:C.muted, padding:"0 4px" }}>‹</button>
+          <span style={{ fontSize:11, fontWeight:700, color:C.slate }}>{monthLabel}</span>
+          <button onClick={() => setViewMonth(v => { const d = new Date(v.year, v.month + 1); return { year: d.getFullYear(), month: d.getMonth() }; })} style={{ background:"none", border:"none", cursor:"pointer", fontSize:16, color:C.muted, padding:"0 4px" }}>›</button>
+        </div>
+      </div>
+      {/* 曜日ヘッダー */}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", gap:2, marginBottom:4 }}>
+        {dayLabels.map((d, i) => (
+          <div key={d} style={{ textAlign:"center", fontSize:9, fontWeight:700, color: i===0?C.danger:i===6?C.primary:C.subtle, padding:"2px 0" }}>{d}</div>
+        ))}
+      </div>
+      {/* 日付グリッド */}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", gap:2 }}>
+        {cells.map((d, i) => {
+          if (!d) return <div key={`empty-${i}`} />;
+          const dateStr = `${year}-${String(month+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+          const count = byDate[dateStr] || 0;
+          const hasDiary = diaryDates.has(dateStr);
+          const isToday = dateStr === todayStr;
+          return (
+            <div key={dateStr} style={{ aspectRatio:"1", borderRadius:6, background: isToday ? C.accent : intensity(count), border: isToday ? `2px solid ${C.accent}` : hasDiary ? `1px solid ${C.purple}` : "1px solid transparent", display:"flex", alignItems:"center", justifyContent:"center", flexDirection:"column", position:"relative" }}>
+              <span style={{ fontSize:9, fontWeight: isToday ? 800 : 400, color: isToday ? "#fff" : count > 0 ? C.primaryDark : C.subtle }}>{d}</span>
+              {hasDiary && <span style={{ fontSize:6, color: isToday ? "#fff" : C.purple }}>📔</span>}
+            </div>
+          );
+        })}
+      </div>
+      {/* 凡例 */}
+      <div style={{ display:"flex", alignItems:"center", gap:8, marginTop:10, flexWrap:"wrap" }}>
+        <div style={{ fontSize:9, color:C.subtle }}>演習回数：</div>
+        {[["なし","transparent"],["1-2",C.primaryLight],["3-5",C.primaryMid],["6-10",C.primary],["11+",C.primaryDark]].map(([l,bg]) => (
+          <div key={l} style={{ display:"flex", alignItems:"center", gap:3 }}>
+            <div style={{ width:10, height:10, borderRadius:2, background:bg, border:`1px solid ${C.border}` }} />
+            <span style={{ fontSize:9, color:C.subtle }}>{l}</span>
+          </div>
+        ))}
+        <div style={{ display:"flex", alignItems:"center", gap:3 }}>
+          <div style={{ width:10, height:10, borderRadius:2, border:`1px solid ${C.purple}`, background:"transparent" }} />
+          <span style={{ fontSize:9, color:C.subtle }}>日記あり</span>
+        </div>
+      </div>
     </div>
   );
 }
