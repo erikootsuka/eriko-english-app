@@ -232,6 +232,7 @@ function Nav({ active, onChange }) {
 }
 
 function HomeTab({ phrases, vocab, progress, goals, onNavigate }) {
+  function HomeTab({ phrases, vocab, progress, goals, onNavigate }) {
   const t = today();
   const todayCount = progress.filter(p => p.date===t).length;
   const streak = getStreak(progress);
@@ -300,6 +301,8 @@ function HomeTab({ phrases, vocab, progress, goals, onNavigate }) {
           { label:"日記を書く", icon:"📔", tab:"diary", color:C.purple, bg:C.purpleLight },
           { label:"練習する", icon:"🎤", tab:"practice", color:C.accent, bg:C.accentLight },
           { label:"表現集を見る", icon:"📚", tab:"phrases", color:C.success, bg:C.successLight },
+          { label:"語彙を覚える", icon:"🔤", tab:"vocab", color:C.warn, bg:C.warnLight },
+          { label:"＋語彙を追加", icon:"📖", tab:"vocab_add", color:C.purple, bg:C.purpleLight },
         ].map(a => (
           <button key={a.tab} onClick={() => onNavigate(a.tab)} style={{
             background:a.bg, border:`1px solid ${a.color}22`, borderRadius:12,
@@ -314,528 +317,6 @@ function HomeTab({ phrases, vocab, progress, goals, onNavigate }) {
     </div>
   );
 }
-
-// ===================== PRACTICE TAB =====================
-function PracticeTab({ phrases }) {
-  const [mode, setMode] = useState("menu"); // menu | shadowing | dictation
-  return (
-    <div style={{ display:"flex", flexDirection:"column", height:"100%" }}>
-      {mode === "menu" && <PracticeMenu onSelect={setMode} phrases={phrases} />}
-      {mode === "shadowing" && <ShadowingMode phrases={phrases} onBack={() => setMode("menu")} />}
-      {mode === "dictation" && <DictationMode phrases={phrases} onBack={() => setMode("menu")} />}
-    </div>
-  );
-}
-
-function PracticeMenu({ onSelect, phrases }) {
-  return (
-    <div style={{ padding:"20px 16px", display:"flex", flexDirection:"column", gap:16 }}>
-      <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-        <h3 style={{ margin:0, fontSize:16, fontWeight:800 }}>🎤 練習</h3>
-      </div>
-
-      <div style={{ background:C.surface, borderRadius:12, padding:14, border:`1px solid ${C.border}`, fontSize:12, color:C.muted, lineHeight:1.6 }}>
-        表現集の英文を使って聞く・話す練習ができます。<br/>
-        音声はブラウザのTTS（音声合成）を使用します。
-      </div>
-
-      <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
-        <button onClick={() => onSelect("shadowing")} style={{
-          background:C.card, border:`2px solid ${C.accent}22`, borderRadius:16,
-          padding:"18px 16px", cursor:"pointer", textAlign:"left",
-          display:"flex", alignItems:"center", gap:14,
-        }}>
-          <div style={{ width:48, height:48, borderRadius:12, background:C.accentLight, display:"flex", alignItems:"center", justifyContent:"center", fontSize:24, flexShrink:0 }}>🔊</div>
-          <div>
-            <div style={{ fontSize:15, fontWeight:700, color:C.slate, marginBottom:4 }}>シャドーイング</div>
-            <div style={{ fontSize:12, color:C.muted, lineHeight:1.5 }}>音声を聞いて、まねして声に出す練習。スクリプトを見ながら繰り返し練習できます。</div>
-          </div>
-        </button>
-
-        <button onClick={() => onSelect("dictation")} style={{
-          background:C.card, border:`2px solid ${C.primary}22`, borderRadius:16,
-          padding:"18px 16px", cursor:"pointer", textAlign:"left",
-          display:"flex", alignItems:"center", gap:14,
-        }}>
-          <div style={{ width:48, height:48, borderRadius:12, background:C.primaryLight, display:"flex", alignItems:"center", justifyContent:"center", fontSize:24, flexShrink:0 }}>✍️</div>
-          <div>
-            <div style={{ fontSize:15, fontWeight:700, color:C.slate, marginBottom:4 }}>ディクテーション</div>
-            <div style={{ fontSize:12, color:C.muted, lineHeight:1.5 }}>音声を聞いて英文を書き取る練習。AIが採点して間違いを説明します。</div>
-          </div>
-        </button>
-      </div>
-
-      <div style={{ background:C.warnLight, border:`1px solid ${C.warnMid}`, borderRadius:10, padding:10, fontSize:11, color:"#92400e" }}>
-        💡 表現集に {phrases.length}件 登録されています。表現集が多いほど練習の幅が広がります。
-      </div>
-    </div>
-  );
-}
-
-// ===================== SHADOWING MODE =====================
-function ShadowingMode({ phrases, onBack }) {
-  const [filterLv, setFilterLv] = useState("すべて");
-  const [filterCat, setFilterCat] = useState("すべて");
-  const [current, setCurrent] = useState(null);
-  const [step, setStep] = useState(0); // 0=設定 1=聞く 2=スクリプト 3=シャドーイング 4=結果
-  const [isSpeaking, setIsSpeaking] = useState(false);
-  const [repeatCount, setRepeatCount] = useState(0);
-  const [selfScore, setSelfScore] = useState(null);
-
-  const pool = phrases.filter(p => {
-    if (filterLv !== "すべて" && p.level !== filterLv) return false;
-    if (filterCat !== "すべて" && p.category !== filterCat) return false;
-    return true;
-  });
-
-  function pickRandom() {
-    if (pool.length === 0) return;
-    const p = pool[Math.floor(Math.random() * pool.length)];
-    setCurrent(p);
-    setStep(1);
-    setRepeatCount(0);
-    setSelfScore(null);
-    stopSpeaking();
-  }
-
-  function playAudio(onEnd) {
-    if (!current) return;
-    setIsSpeaking(true);
-    speak(current.english, () => setIsSpeaking(false));
-    if (onEnd) setTimeout(onEnd, 100);
-  }
-
-  useEffect(() => {
-    return () => stopSpeaking();
-  }, []);
-
-  // 設定画面
-  if (step === 0) return (
-    <div style={{ padding:"16px", display:"flex", flexDirection:"column", height:"100%" }}>
-      <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:16 }}>
-        <button onClick={onBack} style={{ background:"none", border:"none", cursor:"pointer", fontSize:20, color:C.muted }}>←</button>
-        <h3 style={{ margin:0, fontSize:16, fontWeight:800 }}>🔊 シャドーイング</h3>
-      </div>
-      <Field label="レベル">
-        <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
-          {["すべて", ...LEVELS].map(l => (
-            <button key={l} onClick={() => setFilterLv(l)} style={{ padding:"5px 12px", borderRadius:99, border:"none", cursor:"pointer", fontSize:12, fontWeight:600, background:filterLv===l?(l==="すべて"?C.slate:levelColor(l)):C.surface, color:filterLv===l?"#fff":(l==="すべて"?C.muted:levelColor(l)) }}>{l}</button>
-          ))}
-        </div>
-      </Field>
-      <Field label="カテゴリー">
-        <div style={{ display:"flex", gap:5, flexWrap:"wrap" }}>
-          {PHRASE_CATS.map(c => (
-            <button key={c} onClick={() => setFilterCat(c)} style={{ padding:"4px 10px", borderRadius:99, border:"none", cursor:"pointer", fontSize:11, fontWeight:600, background:filterCat===c?C.primary:C.surface, color:filterCat===c?"#fff":C.muted }}>{c}</button>
-          ))}
-        </div>
-      </Field>
-      <div style={{ fontSize:12, color:C.subtle, margin:"8px 0 16px" }}>対象: {pool.length}件</div>
-      <button onClick={pickRandom} disabled={pool.length === 0} style={{ width:"100%", padding:14, borderRadius:12, border:"none", background:pool.length===0?C.subtle:C.accent, color:"#fff", fontSize:15, fontWeight:700, cursor:"pointer" }}>
-        スタート
-      </button>
-    </div>
-  );
-
-  // ステップ1: 音声だけ聞く
-  if (step === 1 && current) return (
-    <div style={{ padding:"16px", display:"flex", flexDirection:"column", height:"100%" }}>
-      <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:16 }}>
-        <button onClick={() => { stopSpeaking(); setStep(0); }} style={{ background:"none", border:"none", cursor:"pointer", fontSize:20, color:C.muted }}>←</button>
-        <h3 style={{ margin:0, fontSize:16, fontWeight:800 }}>🔊 シャドーイング</h3>
-        <div style={{ marginLeft:"auto", fontSize:11, color:C.subtle }}>STEP 1/3</div>
-      </div>
-
-      <div style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:20 }}>
-        <div style={{ background:C.accentLight, borderRadius:16, padding:"16px 20px", textAlign:"center", border:`1px solid ${C.accentMid}` }}>
-          <div style={{ fontSize:11, color:C.accent, fontWeight:700, marginBottom:6 }}>STEP 1 — まず耳だけで聞く</div>
-          <div style={{ fontSize:13, color:C.muted }}>スクリプトは見ずに音声だけ聞いてみましょう</div>
-        </div>
-
-        <div style={{ background:C.card, borderRadius:16, padding:24, width:"100%", textAlign:"center", border:`1px solid ${C.border}` }}>
-          <div style={{ fontSize:12, color:C.muted, marginBottom:8 }}>{current.japanese || "—"}</div>
-          <div style={{ fontSize:13, color:C.subtle, fontStyle:"italic" }}>（英語を聞いてイメージしてみましょう）</div>
-          <div style={{ display:"flex", gap:8, marginTop:16, justifyContent:"center" }}>
-            <span style={{ fontSize:9, padding:"2px 8px", borderRadius:99, background:levelBg(current.level), color:levelColor(current.level), fontWeight:700 }}>{current.level}</span>
-            <span style={{ fontSize:9, padding:"2px 8px", borderRadius:99, background:C.primaryLight, color:C.primary }}>{current.category}</span>
-          </div>
-        </div>
-
-        <button onClick={() => { setIsSpeaking(true); speak(current.english, () => setIsSpeaking(false)); }} style={{
-          width:80, height:80, borderRadius:99, border:"none",
-          background: isSpeaking ? C.accent : C.accentLight,
-          color: isSpeaking ? "#fff" : C.accent,
-          fontSize:32, cursor:"pointer",
-          boxShadow: isSpeaking ? `0 0 0 8px ${C.accentMid}` : "none",
-          transition:"all 0.2s",
-        }}>🔊</button>
-        <div style={{ fontSize:11, color:C.subtle }}>{isSpeaking ? "再生中…" : "タップして再生"}</div>
-      </div>
-
-      <button onClick={() => setStep(2)} style={{ width:"100%", padding:14, borderRadius:12, border:"none", background:C.slate, color:"#fff", fontSize:14, fontWeight:700, cursor:"pointer" }}>
-        スクリプトを見る →
-      </button>
-    </div>
-  );
-
-  // ステップ2: スクリプト表示
-  if (step === 2 && current) return (
-    <div style={{ padding:"16px", display:"flex", flexDirection:"column", height:"100%" }}>
-      <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:16 }}>
-        <button onClick={() => { stopSpeaking(); setStep(1); }} style={{ background:"none", border:"none", cursor:"pointer", fontSize:20, color:C.muted }}>←</button>
-        <h3 style={{ margin:0, fontSize:16, fontWeight:800 }}>🔊 シャドーイング</h3>
-        <div style={{ marginLeft:"auto", fontSize:11, color:C.subtle }}>STEP 2/3</div>
-      </div>
-
-      <div style={{ flex:1, display:"flex", flexDirection:"column", gap:16 }}>
-        <div style={{ background:C.primaryLight, borderRadius:12, padding:"12px 16px", border:`1px solid ${C.primaryMid}` }}>
-          <div style={{ fontSize:11, color:C.primary, fontWeight:700, marginBottom:4 }}>STEP 2 — スクリプトを確認</div>
-          <div style={{ fontSize:13, color:C.muted }}>音声を聞きながら、テキストを目で追いましょう</div>
-        </div>
-
-        <div style={{ background:C.card, borderRadius:16, padding:24, border:`1px solid ${C.border}` }}>
-          <div style={{ fontSize:12, color:C.muted, marginBottom:10 }}>{current.japanese || "—"}</div>
-          <div style={{ fontSize:17, fontWeight:700, color:C.slate, lineHeight:1.7 }}>{current.english}</div>
-          {current.context && <div style={{ fontSize:11, color:C.subtle, marginTop:10 }}>💬 {current.context}</div>}
-        </div>
-
-        <div style={{ display:"flex", gap:10, justifyContent:"center" }}>
-          <button onClick={() => { setIsSpeaking(true); speak(current.english, () => setIsSpeaking(false)); }} style={{
-            flex:1, padding:"12px 0", borderRadius:10, border:"none",
-            background: isSpeaking ? C.accent : C.accentLight,
-            color: isSpeaking ? "#fff" : C.accent,
-            fontSize:14, fontWeight:700, cursor:"pointer",
-          }}>{isSpeaking ? "🔊 再生中…" : "🔊 音声を聞く"}</button>
-          <button onClick={pickRandom} style={{ padding:"12px 14px", borderRadius:10, border:`1px solid ${C.border}`, background:C.surface, cursor:"pointer", fontSize:13, color:C.muted }}>別の表現</button>
-        </div>
-      </div>
-
-      <button onClick={() => { setStep(3); setRepeatCount(0); }} style={{ width:"100%", padding:14, borderRadius:12, border:"none", background:C.accent, color:"#fff", fontSize:14, fontWeight:700, cursor:"pointer" }}>
-        シャドーイングする →
-      </button>
-    </div>
-  );
-
-  // ステップ3: シャドーイング練習
-  if (step === 3 && current) return (
-    <div style={{ padding:"16px", display:"flex", flexDirection:"column", height:"100%" }}>
-      <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:16 }}>
-        <button onClick={() => { stopSpeaking(); setStep(2); }} style={{ background:"none", border:"none", cursor:"pointer", fontSize:20, color:C.muted }}>←</button>
-        <h3 style={{ margin:0, fontSize:16, fontWeight:800 }}>🔊 シャドーイング</h3>
-        <div style={{ marginLeft:"auto", fontSize:11, color:C.subtle }}>STEP 3/3</div>
-      </div>
-
-      <div style={{ flex:1, display:"flex", flexDirection:"column", gap:16 }}>
-        <div style={{ background:C.successLight, borderRadius:12, padding:"12px 16px", border:`1px solid ${C.successMid}` }}>
-          <div style={{ fontSize:11, color:C.success, fontWeight:700, marginBottom:4 }}>STEP 3 — シャドーイング</div>
-          <div style={{ fontSize:13, color:C.muted }}>音声の直後に続けて声に出してみましょう。繰り返すほど定着します。</div>
-        </div>
-
-        <div style={{ background:C.card, borderRadius:16, padding:24, border:`1px solid ${C.border}` }}>
-          <div style={{ fontSize:12, color:C.muted, marginBottom:10 }}>{current.japanese || "—"}</div>
-          <div style={{ fontSize:17, fontWeight:700, color:C.slate, lineHeight:1.7 }}>{current.english}</div>
-        </div>
-
-        <div style={{ textAlign:"center" }}>
-          <button onClick={() => {
-            setRepeatCount(c => c + 1);
-            setIsSpeaking(true);
-            speak(current.english, () => setIsSpeaking(false));
-          }} style={{
-            width:90, height:90, borderRadius:99, border:"none",
-            background: isSpeaking ? C.success : C.successLight,
-            color: isSpeaking ? "#fff" : C.success,
-            fontSize:36, cursor:"pointer",
-            boxShadow: isSpeaking ? `0 0 0 10px ${C.successMid}` : "none",
-            transition:"all 0.2s",
-          }}>🔊</button>
-          <div style={{ fontSize:12, color:C.muted, marginTop:8 }}>{isSpeaking ? "再生中… 続けて声に出そう" : "タップして再生"}</div>
-          {repeatCount > 0 && <div style={{ fontSize:13, color:C.success, fontWeight:700, marginTop:6 }}>🎯 {repeatCount}回練習しました</div>}
-        </div>
-
-        <div style={{ background:C.surface, borderRadius:10, padding:12, fontSize:12, color:C.muted }}>
-          💡 コツ: まず音声をよく聞いてリズムを掴み、次に音声に重ねるように声に出してみましょう。
-        </div>
-      </div>
-
-      <div style={{ display:"flex", gap:10 }}>
-        <button onClick={pickRandom} style={{ flex:1, padding:12, borderRadius:10, border:`1px solid ${C.border}`, background:C.surface, cursor:"pointer", fontSize:13, color:C.muted, fontWeight:600 }}>別の表現</button>
-        <button onClick={() => setStep(4)} style={{ flex:2, padding:12, borderRadius:10, border:"none", background:C.primary, color:"#fff", fontSize:14, fontWeight:700, cursor:"pointer" }}>自己評価する</button>
-      </div>
-    </div>
-  );
-
-  // ステップ4: 自己評価
-  if (step === 4 && current) return (
-    <div style={{ padding:"16px", display:"flex", flexDirection:"column", height:"100%" }}>
-      <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:16 }}>
-        <button onClick={() => setStep(3)} style={{ background:"none", border:"none", cursor:"pointer", fontSize:20, color:C.muted }}>←</button>
-        <h3 style={{ margin:0, fontSize:16, fontWeight:800 }}>🔊 シャドーイング</h3>
-      </div>
-
-      <div style={{ flex:1, display:"flex", flexDirection:"column", gap:16 }}>
-        <div style={{ background:C.card, borderRadius:16, padding:20, border:`1px solid ${C.border}`, textAlign:"center" }}>
-          <div style={{ fontSize:13, color:C.muted, marginBottom:8 }}>{current.japanese}</div>
-          <div style={{ fontSize:16, fontWeight:700, color:C.slate, lineHeight:1.6 }}>{current.english}</div>
-          <div style={{ fontSize:12, color:C.subtle, marginTop:8 }}>🎯 {repeatCount}回練習しました</div>
-        </div>
-
-        <div>
-          <div style={{ fontSize:13, fontWeight:700, color:C.slate, marginBottom:10, textAlign:"center" }}>今回の出来はどうでしたか？</div>
-          <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-            {[
-              { score:3, label:"😄 うまく言えた！", color:C.success, bg:C.successLight },
-              { score:2, label:"🤔 もう少し練習が必要", color:C.warn, bg:C.warnLight },
-              { score:1, label:"😅 難しかった…もう一度", color:C.danger, bg:C.dangerLight },
-            ].map(s => (
-              <button key={s.score} onClick={() => setSelfScore(s.score)} style={{
-                padding:"12px 16px", borderRadius:12, border:`2px solid ${selfScore===s.score?s.color:C.border}`,
-                background: selfScore===s.score ? s.bg : C.card,
-                cursor:"pointer", fontSize:14, fontWeight:selfScore===s.score?700:400,
-                color: selfScore===s.score ? s.color : C.slate, textAlign:"left",
-              }}>{s.label}</button>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div style={{ display:"flex", gap:10 }}>
-        <button onClick={pickRandom} style={{ flex:1, padding:12, borderRadius:10, border:`1px solid ${C.border}`, background:C.surface, cursor:"pointer", fontSize:13, color:C.muted, fontWeight:600 }}>次の表現へ</button>
-        <button onClick={() => { stopSpeaking(); setStep(0); }} style={{ flex:1, padding:12, borderRadius:10, border:"none", background:C.slate, color:"#fff", fontSize:13, fontWeight:700, cursor:"pointer" }}>終了</button>
-      </div>
-    </div>
-  );
-
-  return null;
-}
-
-// ===================== DICTATION MODE =====================
-function DictationMode({ phrases, onBack }) {
-  const [filterLv, setFilterLv] = useState("すべて");
-  const [filterCat, setFilterCat] = useState("すべて");
-  const [current, setCurrent] = useState(null);
-  const [step, setStep] = useState(0); // 0=設定 1=問題 2=結果
-  const [userInput, setUserInput] = useState("");
-  const [isSpeaking, setIsSpeaking] = useState(false);
-  const [playCount, setPlayCount] = useState(0);
-  const [result, setResult] = useState(null);
-  const [checking, setChecking] = useState(false);
-  const [revealed, setRevealed] = useState(false);
-
-  const pool = phrases.filter(p => {
-    if (filterLv !== "すべて" && p.level !== filterLv) return false;
-    if (filterCat !== "すべて" && p.category !== filterCat) return false;
-    return true;
-  });
-
-  function pickRandom() {
-    if (pool.length === 0) return;
-    const p = pool[Math.floor(Math.random() * pool.length)];
-    setCurrent(p);
-    setStep(1);
-    setUserInput("");
-    setPlayCount(0);
-    setResult(null);
-    setRevealed(false);
-    stopSpeaking();
-    // 少し待ってから自動再生
-    setTimeout(() => {
-      setIsSpeaking(true);
-      speak(p.english, () => setIsSpeaking(false));
-      setPlayCount(1);
-    }, 600);
-  }
-
-  async function checkAnswer() {
-    if (!userInput.trim() || !current) return;
-    setChecking(true);
-    try {
-      const sys = `You are an English dictation teacher. Compare the student's dictation to the correct sentence.
-Respond ONLY with valid JSON, no extra text:
-{
-  "score": 0-100,
-  "correct": true|false,
-  "feedback": "日本語でフィードバック（間違いの説明）",
-  "differences": [{"wrong": "学生の表現", "correct": "正しい表現", "note": "簡単な説明"}]
-}
-Be lenient with minor punctuation differences. Focus on words.`;
-      const resp = await callClaude(sys, `Correct: "${current.english}"\nStudent wrote: "${userInput}"`);
-      const jsonMatch = resp.match(/\{[\s\S]*\}/);
-      if (jsonMatch) setResult(JSON.parse(jsonMatch[0]));
-    } catch {
-      // フォールバック: 単純比較
-      const norm = s => s.toLowerCase().replace(/[.,!?;:'"]/g,"").trim();
-      const correct = norm(current.english) === norm(userInput);
-      setResult({ score: correct?100:0, correct, feedback: correct?"完璧です！":"もう一度確認してみましょう。", differences:[] });
-    }
-    setChecking(false);
-    setStep(2);
-  }
-
-  useEffect(() => { return () => stopSpeaking(); }, []);
-
-  // 設定画面
-  if (step === 0) return (
-    <div style={{ padding:"16px", display:"flex", flexDirection:"column", height:"100%" }}>
-      <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:16 }}>
-        <button onClick={onBack} style={{ background:"none", border:"none", cursor:"pointer", fontSize:20, color:C.muted }}>←</button>
-        <h3 style={{ margin:0, fontSize:16, fontWeight:800 }}>✍️ ディクテーション</h3>
-      </div>
-      <Field label="レベル">
-        <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
-          {["すべて", ...LEVELS].map(l => (
-            <button key={l} onClick={() => setFilterLv(l)} style={{ padding:"5px 12px", borderRadius:99, border:"none", cursor:"pointer", fontSize:12, fontWeight:600, background:filterLv===l?(l==="すべて"?C.slate:levelColor(l)):C.surface, color:filterLv===l?"#fff":(l==="すべて"?C.muted:levelColor(l)) }}>{l}</button>
-          ))}
-        </div>
-      </Field>
-      <Field label="カテゴリー">
-        <div style={{ display:"flex", gap:5, flexWrap:"wrap" }}>
-          {PHRASE_CATS.map(c => (
-            <button key={c} onClick={() => setFilterCat(c)} style={{ padding:"4px 10px", borderRadius:99, border:"none", cursor:"pointer", fontSize:11, fontWeight:600, background:filterCat===c?C.primary:C.surface, color:filterCat===c?"#fff":C.muted }}>{c}</button>
-          ))}
-        </div>
-      </Field>
-      <div style={{ fontSize:12, color:C.subtle, margin:"8px 0 16px" }}>対象: {pool.length}件</div>
-      <button onClick={pickRandom} disabled={pool.length === 0} style={{ width:"100%", padding:14, borderRadius:12, border:"none", background:pool.length===0?C.subtle:C.primary, color:"#fff", fontSize:15, fontWeight:700, cursor:"pointer" }}>
-        スタート
-      </button>
-    </div>
-  );
-
-  // 問題画面
-  if (step === 1 && current) return (
-    <div style={{ padding:"16px", display:"flex", flexDirection:"column", height:"100%" }}>
-      <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:16 }}>
-        <button onClick={() => { stopSpeaking(); setStep(0); }} style={{ background:"none", border:"none", cursor:"pointer", fontSize:20, color:C.muted }}>←</button>
-        <h3 style={{ margin:0, fontSize:16, fontWeight:800 }}>✍️ ディクテーション</h3>
-        <div style={{ marginLeft:"auto", fontSize:11, color:C.subtle }}>再生 {playCount}回</div>
-      </div>
-
-      <div style={{ flex:1, display:"flex", flexDirection:"column", gap:14 }}>
-        <div style={{ background:C.primaryLight, borderRadius:12, padding:"12px 16px", border:`1px solid ${C.primaryMid}` }}>
-          <div style={{ fontSize:12, color:C.primary, fontWeight:700, marginBottom:2 }}>音声を聞いて英文を書き取ってください</div>
-          {current.japanese && <div style={{ fontSize:12, color:C.muted }}>意味のヒント: {current.japanese}</div>}
-        </div>
-
-        <div style={{ display:"flex", gap:10, justifyContent:"center", alignItems:"center" }}>
-          <button onClick={() => {
-            setIsSpeaking(true);
-            speak(current.english, () => setIsSpeaking(false));
-            setPlayCount(c => c + 1);
-          }} style={{
-            flex:1, padding:"14px 0", borderRadius:12, border:"none",
-            background: isSpeaking ? C.primary : C.primaryLight,
-            color: isSpeaking ? "#fff" : C.primary,
-            fontSize:15, fontWeight:700, cursor:"pointer",
-            boxShadow: isSpeaking ? `0 0 0 4px ${C.primaryMid}` : "none",
-            transition:"all 0.2s",
-          }}>{isSpeaking ? "🔊 再生中…" : "🔊 もう一度聞く"}</button>
-          <button onClick={() => {
-            setIsSpeaking(true);
-            const utter = new SpeechSynthesisUtterance(current.english);
-            utter.lang = "en-US";
-            utter.rate = 0.6;
-            const voices = window.speechSynthesis?.getVoices() || [];
-            const enVoice = voices.find(v => v.lang.startsWith("en"));
-            if (enVoice) utter.voice = enVoice;
-            utter.onend = () => setIsSpeaking(false);
-            window.speechSynthesis?.cancel();
-            window.speechSynthesis?.speak(utter);
-            setPlayCount(c => c + 1);
-          }} style={{
-            padding:"14px 12px", borderRadius:12, border:`1px solid ${C.border}`,
-            background:C.surface, cursor:"pointer", fontSize:12, color:C.muted, fontWeight:600,
-          }}>🐢 ゆっくり</button>
-        </div>
-
-        <textarea
-          value={userInput}
-          onChange={e => setUserInput(e.target.value)}
-          placeholder="聞こえた英文をここに入力…"
-          style={{
-            flex:1, padding:14, borderRadius:12, border:`1px solid ${C.border}`,
-            fontSize:15, resize:"none", fontFamily:"inherit", outline:"none", lineHeight:1.7,
-            minHeight:120,
-          }}
-        />
-
-        {!revealed ? (
-          <button onClick={() => setRevealed(true)} style={{ background:"none", border:"none", fontSize:12, color:C.subtle, cursor:"pointer", textDecoration:"underline", textAlign:"center" }}>
-            答えを見る（スキップ）
-          </button>
-        ) : (
-          <div style={{ background:C.surface, borderRadius:10, padding:12, fontSize:13, color:C.slate, lineHeight:1.6 }}>
-            <span style={{ fontSize:11, color:C.subtle }}>正解: </span>{current.english}
-          </div>
-        )}
-      </div>
-
-      <button onClick={checkAnswer} disabled={checking || !userInput.trim()} style={{
-        width:"100%", padding:14, borderRadius:12, border:"none",
-        background: checking||!userInput.trim() ? C.subtle : C.primary,
-        color:"#fff", fontSize:15, fontWeight:700, cursor:"pointer", marginTop:8,
-      }}>{checking ? "採点中…" : "採点する"}</button>
-    </div>
-  );
-
-  // 結果画面
-  if (step === 2 && current && result) return (
-    <div style={{ flex:1, overflowY:"auto", padding:"16px" }}>
-      <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:16 }}>
-        <button onClick={() => setStep(1)} style={{ background:"none", border:"none", cursor:"pointer", fontSize:20, color:C.muted }}>←</button>
-        <h3 style={{ margin:0, fontSize:16, fontWeight:800 }}>✍️ 結果</h3>
-      </div>
-
-      {/* スコア */}
-      <div style={{
-        background: result.score >= 80 ? `linear-gradient(135deg,${C.success},#22c55e)` : result.score >= 50 ? `linear-gradient(135deg,${C.warn},#f59e0b)` : `linear-gradient(135deg,${C.danger},#ef4444)`,
-        borderRadius:16, padding:20, marginBottom:14, color:"#fff", textAlign:"center",
-      }}>
-        <div style={{ fontSize:48, fontWeight:800 }}>{result.score}<span style={{ fontSize:20 }}>点</span></div>
-        <div style={{ fontSize:14, marginTop:4, opacity:0.9 }}>{result.score >= 80 ? "素晴らしい！" : result.score >= 50 ? "もう少し！" : "練習あるのみ！"}</div>
-      </div>
-
-      {/* あなたの回答 vs 正解 */}
-      <div style={{ background:C.card, borderRadius:12, padding:14, marginBottom:12, border:`1px solid ${C.border}` }}>
-        <div style={{ fontSize:11, fontWeight:700, color:C.muted, marginBottom:8 }}>あなたの回答</div>
-        <div style={{ fontSize:13, color:C.slate, lineHeight:1.6 }}>{userInput}</div>
-        <div style={{ height:1, background:C.border, margin:"10px 0" }} />
-        <div style={{ fontSize:11, fontWeight:700, color:C.success, marginBottom:8 }}>正解</div>
-        <div style={{ fontSize:13, color:C.slate, lineHeight:1.6, fontWeight:600 }}>{current.english}</div>
-      </div>
-
-      {/* フィードバック */}
-      {result.feedback && (
-        <div style={{ background:C.primaryLight, borderRadius:12, padding:14, marginBottom:12, border:`1px solid ${C.primaryMid}` }}>
-          <div style={{ fontSize:11, fontWeight:700, color:C.primary, marginBottom:6 }}>💡 フィードバック</div>
-          <div style={{ fontSize:13, color:C.slate, lineHeight:1.6 }}>{result.feedback}</div>
-        </div>
-      )}
-
-      {/* 差分 */}
-      {result.differences?.length > 0 && (
-        <div style={{ background:C.card, borderRadius:12, padding:14, marginBottom:14, border:`1px solid ${C.border}` }}>
-          <div style={{ fontSize:11, fontWeight:700, color:C.danger, marginBottom:8 }}>🔍 間違い箇所</div>
-          {result.differences.map((d, i) => (
-            <div key={i} style={{ marginBottom:8, paddingBottom:8, borderBottom:i<result.differences.length-1?`1px solid ${C.surface}`:"none" }}>
-              <div style={{ fontSize:12 }}><span style={{ color:C.danger }}>❌ {d.wrong}</span></div>
-              <div style={{ fontSize:12 }}><span style={{ color:C.success }}>✅ {d.correct}</span></div>
-              {d.note && <div style={{ fontSize:11, color:C.muted, marginTop:2 }}>💡 {d.note}</div>}
-            </div>
-          ))}
-        </div>
-      )}
-
-      <div style={{ display:"flex", gap:10 }}>
-        <button onClick={() => { stopSpeaking(); setStep(1); setUserInput(""); setResult(null); setRevealed(false); setPlayCount(0); setTimeout(() => { setIsSpeaking(true); speak(current.english, () => setIsSpeaking(false)); setPlayCount(1); }, 300); }} style={{ flex:1, padding:12, borderRadius:10, border:`1px solid ${C.border}`, background:C.surface, cursor:"pointer", fontSize:13, color:C.muted, fontWeight:600 }}>もう一度</button>
-        <button onClick={pickRandom} style={{ flex:1, padding:12, borderRadius:10, border:"none", background:C.primary, color:"#fff", fontSize:13, fontWeight:700, cursor:"pointer" }}>次の問題</button>
-      </div>
-    </div>
-  );
-
-  return null;
-}
-
 // ===================== PHRASE EDIT MODAL =====================
 function PhraseEditModal({ phrase, onSave, onClose }) {
   const [edited, setEdited] = useState({ ...phrase });
@@ -1073,14 +554,14 @@ Return ONLY valid JSON array with no other text: [{"english":"...","level":"初�
     </div>
   );
 }
-
-function VocabTab({ vocab, setVocab }) {
+  
+function VocabTab({ vocab, setVocab, autoOpen }) {
   const [mode, setMode] = useState("list");
   const [cat, setCat] = useState("すべて");
   const [lv, setLv] = useState("すべて");
   const [flashIdx, setFlashIdx] = useState(0);
   const [flipped, setFlipped] = useState(false);
-  const [showAdd, setShowAdd] = useState(false);
+  const [showAdd, setShowAdd] = useState(!!autoOpen);
   const [newV, setNewV] = useState({ word:"", meaning:"", partOfSpeech:"名詞", example:"", category:"一般", level:"中級" });
   const filtered = vocab.filter(v => { if (cat !== "すべて" && v.category !== cat) return false; if (lv !== "すべて" && v.level !== lv) return false; return true; });
   const inp = { width:"100%", padding:"8px 10px", borderRadius:8, border:`1px solid ${C.border}`, fontSize:13, boxSizing:"border-box", outline:"none" };
@@ -1505,23 +986,71 @@ function GoalsTab({ goals, setGoals, progress, weaknesses, phrases, vocab }) {
 
 // ===================== HELPERS =====================
 function parseCopilotText(text) {
+  // ===================== HELPERS =====================
+function parseCopilotText(text) {
   const phrases = [];
-  const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const enMatch = line.match(/^\*?\*?([A-Z][^*\n]{10,})\*?\*?$/);
-    if (enMatch) {
-      const english = enMatch[1].replace(/\*\*/g,"").trim();
-      const jaMatch = line.match(/（([^）]+)）/) || (lines[i+1] && lines[i+1].match(/^（([^）]+)）/));
-      const japanese = jaMatch ? jaMatch[1] : "";
-      if (english.length > 15 && /[a-zA-Z]/.test(english)) {
-        phrases.push({ id:uid(), english, japanese, context:"", category:"インポート", level:"中級", source:"コパイロット", addedDate:today() });
-      }
-    }
+  const seen = new Set();
+
+  function hasJapanese(str) {
+    return /[\u3000-\u9fff\uff00-\uffef]/.test(str);
   }
+
+  function removeUrls(str) {
+    return str.replace(/https?:\/\/[^\s]+/g, "").trim();
+  }
+
+  function isValidEnglish(str) {
+    if (!str || str.length < 15) return false;
+    if (hasJapanese(str)) return false;
+    if (!/[a-zA-Z]/.test(str)) return false;
+    if (/^https?:\/\//.test(str.trim())) return false;
+    if (/^[^a-zA-Z]+$/.test(str)) return false;
+    return true;
+  }
+
+  const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
+
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i];
+
+    line = line
+      .replace(/^\*\*(.+)\*\*$/, "$1")
+      .replace(/^\*\*/, "").replace(/\*\*$/, "")
+      .replace(/^\*/, "").replace(/\*/g, "")
+      .replace(/^-\s+/, "")
+      .replace(/^•\s+/, "")
+      .replace(/^[\d]+\.\s+/, "")
+      .trim();
+
+    line = removeUrls(line);
+
+    if (!isValidEnglish(line)) continue;
+    if (seen.has(line)) continue;
+    seen.add(line);
+
+    let english = line;
+    let context = "";
+    const colonMatch = line.match(/^([A-Z][^:]+):\s+(.+)$/);
+    if (colonMatch && colonMatch[1].length < 40 && colonMatch[2].length > 10) {
+      context = colonMatch[1].trim();
+      english = colonMatch[2].trim();
+      if (!isValidEnglish(english)) continue;
+    }
+
+    phrases.push({
+      id: uid(),
+      english,
+      japanese: "",
+      context,
+      category: "インポート",
+      level: "中級",
+      source: "コパイロット",
+      addedDate: today(),
+    });
+  }
+
   return phrases;
 }
-
 function Modal({ children, onClose }) {
   return (
     <div style={{ position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",zIndex:50,display:"flex",alignItems:"flex-end" }}>
@@ -1733,6 +1262,8 @@ export default function App() {
       case "diary":    return <DiaryTab setPhrases={setPhrases} weaknesses={weaknesses} />;
       case "roleplay": return <RoleplayTab />;
       case "goals":    return <GoalsTab goals={goals} setGoals={setGoals} progress={progress} weaknesses={weaknesses} phrases={phrases} vocab={vocab} />;
+      case "vocab":     return <VocabTab vocab={vocab} setVocab={setVocab} />;
+case "vocab_add": return <VocabTab vocab={vocab} setVocab={setVocab} autoOpen={true} />;
       default:         return null;
     }
   };
