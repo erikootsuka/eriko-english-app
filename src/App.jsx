@@ -108,12 +108,12 @@ function levelBg(level) {
 }
 
 // ===================== TTS =====================
-function speak(text, onEnd) {
+function speak(text, onEnd, rate = 0.9) {
   if (!window.speechSynthesis) { if (onEnd) onEnd(); return; }
   window.speechSynthesis.cancel();
   const utter = new SpeechSynthesisUtterance(text);
   utter.lang = "en-US";
-  utter.rate = 0.9;
+  utter.rate = rate;
   utter.pitch = 1;
   const voices = window.speechSynthesis.getVoices();
   const enVoice = voices.find(v => v.lang.startsWith("en") && v.localService) || voices.find(v => v.lang.startsWith("en"));
@@ -139,6 +139,55 @@ async function callClaude(systemPrompt, userMessage) {
   }
   const data = await res.json();
   return data.content?.[0]?.text || "";
+}
+
+// ===================== ROBUST JSON PARSING =====================
+// AIの応答からJSONを抽出してパースする。よくある崩れ方（コードブロック混入、
+// 制御文字、末尾カンマ、文字列内の生改行など）を段階的に補正してから再試行する。
+function tryParseJSON(raw) {
+  if (!raw) return null;
+  const attempts = [];
+
+  // 1. そのまま
+  attempts.push(raw.trim());
+  // 2. ```json ... ``` フェンス除去
+  attempts.push(raw.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim());
+  // 3. 最初の { または [ から最後の } または ] までを抽出
+  const objMatch = raw.match(/\{[\s\S]*\}/);
+  const arrMatch = raw.match(/\[[\s\S]*\]/);
+  if (objMatch) attempts.push(objMatch[0]);
+  if (arrMatch) attempts.push(arrMatch[0]);
+
+  for (const candidate of attempts) {
+    if (!candidate) continue;
+    try { return JSON.parse(candidate); } catch {}
+    // 補正を試す: 制御文字除去・末尾カンマ除去
+    try {
+      const cleaned = candidate
+        .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "") // 制御文字除去（\n,\tは残す）
+        .replace(/,\s*([}\]])/g, "$1"); // 末尾カンマ除去
+      return JSON.parse(cleaned);
+    } catch {}
+  }
+  return null;
+}
+
+// callClaude + JSON抽出 + 失敗時は明確なエラーを伝えて1回だけ自動リトライする
+async function callClaudeJSON(systemPrompt, userMessage, { retry = true } = {}) {
+  const resp = await callClaude(systemPrompt, userMessage);
+  let result = tryParseJSON(resp);
+  if (result) return result;
+
+  if (retry) {
+    // AIにJSON限定で再依頼（フォーマット崩れの修復を狙う）
+    try {
+      const fixSys = `${systemPrompt}\n\nCRITICAL: Your previous response could not be parsed as JSON. Return ONLY the raw JSON object/array, with no markdown code fences, no commentary, and no trailing commas.`;
+      const resp2 = await callClaude(fixSys, userMessage);
+      result = tryParseJSON(resp2);
+      if (result) return result;
+    } catch {}
+  }
+  throw new Error("AIからの応答をJSONとして解析できませんでした");
 }
 
 // ===================== PDF TEXT EXTRACTION =====================
@@ -559,6 +608,7 @@ function PhrasesTab({ phrases, setPhrases }) {
   const [search, setSearch] = useState("");
   const [cat, setCat] = useState("すべて");
   const [lv, setLv] = useState("すべて");
+  const [showMissingOnly, setShowMissingOnly] = useState(false);
   const [expanded, setExpanded] = useState(null);
   const [editingPhrase, setEditingPhrase] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
@@ -568,14 +618,30 @@ function PhrasesTab({ phrases, setPhrases }) {
   const [importLoading, setImportLoading] = useState(false);
   const [importFiles, setImportFiles] = useState([]);
   const [importProgress, setImportProgress] = useState("");
+  const [retryingId, setRetryingId] = useState(null);
   const [newP, setNewP] = useState({ japanese:"", english:"", context:"", category:"ビジネス挨拶", level:"初級" });
 
+  const missingCount = phrases.filter(p => !p.japanese || !p.japanese.trim()).length;
+
   const filtered = phrases.filter(p => {
+    if (showMissingOnly) return !p.japanese || !p.japanese.trim();
     if (cat !== "すべて" && p.category !== cat) return false;
     if (lv !== "すべて" && p.level !== lv) return false;
     if (search && !p.english.toLowerCase().includes(search.toLowerCase()) && !p.japanese.includes(search)) return false;
     return true;
   });
+
+  async function retryTranslation(phraseId, englishText) {
+    setRetryingId(phraseId);
+    try {
+      const sys = `You are a Japanese translator specializing in pharmaceutical and business English. Provide a natural Japanese translation and brief context in Japanese for the given English phrase. Return ONLY valid JSON: {"japanese":"...","context":"..."}`;
+      const result = await callClaudeJSON(sys, englishText);
+      if (result.japanese) {
+        setPhrases(prev => prev.map(p => p.id === phraseId ? { ...p, japanese: result.japanese, context: p.context || result.context || "" } : p));
+      }
+    } catch {}
+    setRetryingId(null);
+  }
 
   async function handleMultiFileSelect(e) {
     const files = Array.from(e.target.files);
@@ -681,6 +747,11 @@ Return ONLY valid JSON array with no other text: [{"english":"...","level":"初�
           </div>
         </div>
         <input placeholder="検索…" value={search} onChange={e => setSearch(e.target.value)} style={{ ...inp, marginBottom:8 }} />
+        {missingCount > 0 && (
+          <button onClick={() => setShowMissingOnly(v => !v)} style={{ width:"100%", marginBottom:8, padding:"6px 10px", borderRadius:8, border:`1px solid ${showMissingOnly ? C.warn : C.warnMid}`, background: showMissingOnly ? C.warn : C.warnLight, color: showMissingOnly ? "#fff" : C.warn, fontSize:11, fontWeight:700, cursor:"pointer", textAlign:"left" }}>
+            ⚠️ 和訳なし {missingCount}件 {showMissingOnly ? "を表示中（タップで解除）" : "（タップで絞り込み）"}
+          </button>
+        )}
         <div style={{ display:"flex", gap:5, overflowX:"auto", paddingBottom:6 }}>
           {["すべて", ...LEVELS].map(l => (<button key={l} onClick={() => setLv(l)} style={{ padding:"3px 10px", borderRadius:99, border:"none", cursor:"pointer", whiteSpace:"nowrap", fontSize:11, fontWeight:600, background:lv===l?(l==="すべて"?C.slate:levelColor(l)):C.surface, color:lv===l?"#fff":C.muted }}>{l}</button>))}
         </div>
@@ -690,10 +761,12 @@ Return ONLY valid JSON array with no other text: [{"english":"...","level":"初�
       </div>
       <div style={{ flex:1, overflowY:"auto", padding:"4px 16px 16px" }}>
         <div style={{ fontSize:11, color:C.subtle, marginBottom:8 }}>{filtered.length}件</div>
-        {filtered.map(p => (
-          <div key={p.id} style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:12, marginBottom:8, overflow:"hidden" }}>
+        {filtered.map(p => {
+          const isMissing = !p.japanese || !p.japanese.trim();
+          return (
+          <div key={p.id} style={{ background:C.card, border:`1px solid ${isMissing ? C.warnMid : C.border}`, borderRadius:12, marginBottom:8, overflow:"hidden" }}>
             <div onClick={() => setExpanded(expanded === p.id ? null : p.id)} style={{ padding:"11px 13px", cursor:"pointer" }}>
-              <div style={{ fontSize:12, color:C.muted, marginBottom:3 }}>{p.japanese || "—"}</div>
+              <div style={{ fontSize:12, color: isMissing ? C.warn : C.muted, marginBottom:3, fontStyle: isMissing ? "italic" : "normal" }}>{p.japanese || "⚠️ 和訳なし"}</div>
               <div style={{ fontSize:14, fontWeight:700, color:C.slate, lineHeight:1.4 }}>{p.english}</div>
               <div style={{ display:"flex", gap:5, marginTop:6, flexWrap:"wrap" }}>
                 <span style={{ fontSize:9, padding:"2px 8px", borderRadius:99, background:levelBg(p.level), color:levelColor(p.level), fontWeight:700 }}>{p.level}</span>
@@ -703,15 +776,19 @@ Return ONLY valid JSON array with no other text: [{"english":"...","level":"初�
             {expanded === p.id && (
               <div style={{ padding:"0 13px 11px", borderTop:`1px solid ${C.surface}` }}>
                 {p.context && <div style={{ fontSize:12, color:C.muted, marginTop:8 }}>💬 {p.context}</div>}
-                <div style={{ display:"flex", gap:8, marginTop:8, alignItems:"center" }}>
+                <div style={{ display:"flex", gap:8, marginTop:8, alignItems:"center", flexWrap:"wrap" }}>
                   <div style={{ fontSize:10, color:C.subtle }}>{p.addedDate}</div>
+                  {isMissing && (
+                    <button onClick={e => { e.stopPropagation(); retryTranslation(p.id, p.english); }} disabled={retryingId === p.id} style={{ background:C.warnLight, border:`1px solid ${C.warnMid}`, color:C.warn, borderRadius:6, padding:"2px 10px", fontSize:10, cursor:"pointer", fontWeight:600 }}>{retryingId === p.id ? "生成中…" : "🔄 AI和訳を再試行"}</button>
+                  )}
                   <button onClick={e => { e.stopPropagation(); setEditingPhrase(p); }} style={{ background:C.primaryLight, border:`1px solid ${C.primaryMid}`, color:C.primary, borderRadius:6, padding:"2px 10px", fontSize:10, cursor:"pointer", fontWeight:600 }}>編集</button>
                   <button onClick={e => { e.stopPropagation(); setPhrases(prev => prev.filter(x => x.id !== p.id)); }} style={{ background:"none", border:`1px solid ${C.dangerMid}`, color:C.danger, borderRadius:6, padding:"2px 8px", fontSize:10, cursor:"pointer" }}>削除</button>
                 </div>
               </div>
             )}
           </div>
-        ))}
+          );
+        })}
       </div>
       {editingPhrase && (<PhraseEditModal phrase={editingPhrase} onSave={updated => setPhrases(prev => prev.map(p => p.id === updated.id ? updated : p))} onClose={() => setEditingPhrase(null)} />)}
       {showAdd && (
@@ -743,17 +820,38 @@ Return ONLY valid JSON array with no other text: [{"english":"...","level":"初�
           ) : (
             <>
               <div style={{ background:C.successLight, border:`1px solid ${C.successMid}`, borderRadius:10, padding:10, marginBottom:10 }}><div style={{ fontSize:13, fontWeight:700, color:C.success }}>✅ {importResult.length}件抽出しました（重複除去済み）</div></div>
-              <div style={{ maxHeight:200, overflowY:"auto" }}>
-                {/* FIX: 和訳を確認画面でも表示 */}
-                {importResult.map(p => (
-                  <div key={p.id} style={{ padding:"6px 0", borderBottom:`1px solid ${C.surface}`, fontSize:12 }}>
-                    <div style={{ display:"flex", alignItems:"center", gap:5, marginBottom:2 }}>
-                      <span style={{ fontSize:9, padding:"1px 6px", borderRadius:99, background:levelBg(p.level), color:levelColor(p.level), fontWeight:700 }}>{p.level}</span>
+              {importResult.some(p => !p.japanese || !p.japanese.trim()) && (
+                <div style={{ background:C.warnLight, border:`1px solid ${C.warnMid}`, borderRadius:10, padding:10, marginBottom:10, fontSize:11, color:"#92400e" }}>
+                  ⚠️ {importResult.filter(p => !p.japanese || !p.japanese.trim()).length}件は和訳が生成できませんでした。下の欄に直接入力できます（クイズ等で活用するため和訳の入力をおすすめします）。
+                </div>
+              )}
+              <div style={{ maxHeight:280, overflowY:"auto" }}>
+                {importResult.map((p, idx) => {
+                  const missing = !p.japanese || !p.japanese.trim();
+                  return (
+                    <div key={p.id} style={{ padding:"8px 0", borderBottom:`1px solid ${C.surface}`, fontSize:12 }}>
+                      <div style={{ display:"flex", alignItems:"center", gap:5, marginBottom:3 }}>
+                        <span style={{ fontSize:9, padding:"1px 6px", borderRadius:99, background:levelBg(p.level), color:levelColor(p.level), fontWeight:700 }}>{p.level}</span>
+                        {missing && <span style={{ fontSize:9, padding:"1px 6px", borderRadius:99, background:C.warnLight, color:C.warn, fontWeight:700 }}>和訳なし</span>}
+                      </div>
+                      <div style={{ fontWeight:600, marginBottom:4 }}>{p.english}</div>
+                      <input
+                        value={p.japanese || ""}
+                        onChange={e => {
+                          const val = e.target.value;
+                          setImportResult(prev => prev.map((x, i) => i === idx ? { ...x, japanese: val } : x));
+                        }}
+                        placeholder="日本語訳を入力…"
+                        style={{
+                          width:"100%", padding:"6px 8px", borderRadius:6, fontSize:11, boxSizing:"border-box", outline:"none",
+                          border: missing ? `1px solid ${C.warnMid}` : `1px solid ${C.border}`,
+                          background: missing ? C.warnLight : C.surface,
+                          color: C.slate,
+                        }}
+                      />
                     </div>
-                    <div style={{ fontWeight:600 }}>{p.english}</div>
-                    <div style={{ color:C.muted, fontSize:11 }}>{p.japanese || "（和訳なし）"}</div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
               <ModalButtons onCancel={() => setImportResult(null)} onOk={() => { setPhrases(prev => [...importResult, ...prev]); setImportResult(null); setImportText(""); setImportFiles([]); setShowImport(false); }} okLabel={`${importResult.length}件を表現集に追加`} cancelLabel="戻る" />
             </>
@@ -1039,13 +1137,8 @@ function DiaryTab({ setPhrases, weaknesses }) {
     setLoading(true); setError(""); setLoadingMsg("AIが添削中… (10〜20秒)");
     try {
       const weakList = weaknesses.map(w => w.english).join(", ");
-      const sys = `You are an English teacher for Eriko, a Japanese pharmaceutical regulatory affairs professional. She writes an English diary to improve her language skills. Analyze her diary entry and respond with ONLY a valid JSON object (no markdown, no explanation): { "corrected": "full corrected diary text here", "corrections": [{"original": "wrong phrase", "corrected": "correct phrase", "explanation": "Japanese explanation"}], "patterns": [{"pattern": "grammar pattern name", "explanation": "Japanese explanation", "example": "example sentence"}], "newPhrases": [{"english": "useful phrase", "japanese": "Japanese meaning", "context": "when to use", "level": "初級"}], "weakPoints": ["weakness description in Japanese"] } Rules: - corrections: list actual errors found (empty array [] if no errors) - patterns: 2-3 key grammar patterns to remember - newPhrases: 3-5 useful phrases, level must be one of: 初級, 中級, 上級 - weakPoints: 1-3 specific weaknesses observed - Her known weak areas: ${weakList || "none yet"}`;
-      const resp = await callClaude(sys, draft);
-      let result = null;
-      try { result = JSON.parse(resp.trim()); } catch {}
-      if (!result) { try { result = JSON.parse(resp.replace(/```json\s*/g,"").replace(/```\s*/g,"").trim()); } catch {} }
-      if (!result) { const m = resp.match(/\{[\s\S]*\}/); if (m) { try { result = JSON.parse(m[0]); } catch {} } }
-      if (!result) throw new Error("AIからの応答をJSONとして解析できませんでした");
+      const sys = `You are an English teacher for Eriko, a Japanese pharmaceutical regulatory affairs professional. She writes an English diary to improve her language skills. Analyze her diary entry and respond with ONLY a valid JSON object (no markdown, no explanation): { "corrected": "full corrected diary text here", "corrections": [{"original": "wrong phrase", "corrected": "correct phrase", "explanation": "Japanese explanation"}], "patterns": [{"pattern": "grammar pattern name", "explanation": "Japanese explanation", "example": "example sentence"}], "newPhrases": [{"english": "useful phrase", "japanese": "Japanese meaning", "context": "when to use", "level": "初級"}], "weakPoints": ["weakness description in Japanese"] } Rules: - corrections: list actual errors found (empty array [] if no errors) - patterns: 2-3 key grammar patterns to remember - newPhrases: 3-5 useful phrases, level must be one of: 初級, 中級, 上級 - weakPoints: 1-3 specific weaknesses observed - Her known weak areas: ${weakList || "none yet"} - IMPORTANT: escape all double quotes and newlines properly inside JSON string values so the JSON remains valid.`;
+      const result = await callClaudeJSON(sys, draft);
       result.corrections = result.corrections || []; result.patterns = result.patterns || []; result.newPhrases = result.newPhrases || []; result.weakPoints = result.weakPoints || []; result.corrected = result.corrected || draft;
       const entry = { id:uid(), date:today(), original:draft, ...result };
       setEntries(prev => { const updated = [entry, ...prev]; save(STORAGE.diary, updated); return updated; });
@@ -1148,7 +1241,14 @@ function PracticeTab({ phrases }) {
   const [dictInput, setDictInput] = useState("");
   const [dictResult, setDictResult] = useState(null);
   const [checking, setChecking] = useState(false);
+  const [speechRate, setSpeechRate] = useState(0.9); // 0.7=ゆっくり / 0.9=普通 / 1.1=速い
   const recognitionRef = useRef(null);
+
+  const SPEED_OPTIONS = [
+    { rate: 0.6, label: "🐢 ゆっくり" },
+    { rate: 0.9, label: "🚶 普通" },
+    { rate: 1.3, label: "🐇 速い" },
+  ];
 
   const filtered = cat === "すべて" ? phrases : phrases.filter(p => p.category === cat);
 
@@ -1183,9 +1283,10 @@ function PracticeTab({ phrases }) {
     setIsPlaying(true);
     setHighlightIdx(0);
     const words = currentPhrase.english.split(" ");
-    speak(currentPhrase.english, () => { setIsPlaying(false); setHighlightIdx(-1); });
+    speak(currentPhrase.english, () => { setIsPlaying(false); setHighlightIdx(-1); }, speechRate);
+    const durationMs = (2800 / speechRate);
     words.forEach((_, i) => {
-      setTimeout(() => setHighlightIdx(i), (i / words.length) * 2800);
+      setTimeout(() => setHighlightIdx(i), (i / words.length) * durationMs);
     });
   }
 
@@ -1284,7 +1385,12 @@ function PracticeTab({ phrases }) {
         {subMode === "listen" && (
           <div style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:20 }}>
             <div style={{ fontSize:13, color:C.muted, textAlign:"center" }}>まず音声だけ聞いてみましょう<br/>スクリプトは表示されません</div>
-            <div style={{ width:80, height:80, borderRadius:99, background:`linear-gradient(135deg,${C.primary},${C.accent})`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:36, cursor:"pointer", boxShadow:`0 4px 16px ${C.primary}44` }} onClick={() => speak(currentPhrase.english)}>🔊</div>
+            <div style={{ width:80, height:80, borderRadius:99, background:`linear-gradient(135deg,${C.primary},${C.accent})`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:36, cursor:"pointer", boxShadow:`0 4px 16px ${C.primary}44` }} onClick={() => speak(currentPhrase.english, null, speechRate)}>🔊</div>
+            <div style={{ display:"flex", gap:6 }}>
+              {SPEED_OPTIONS.map(opt => (
+                <button key={opt.rate} onClick={() => setSpeechRate(opt.rate)} style={{ padding:"5px 10px", borderRadius:99, border:"none", cursor:"pointer", fontSize:11, fontWeight:700, background: speechRate===opt.rate ? C.primary : C.surface, color: speechRate===opt.rate ? "#fff" : C.muted }}>{opt.label}</button>
+              ))}
+            </div>
             <div style={{ fontSize:11, color:C.subtle }}>{currentPhrase.category} • {currentPhrase.japanese || ""}</div>
             <button onClick={() => setSubMode("read")} style={{ width:"100%", padding:14, borderRadius:12, border:"none", background:C.primary, color:"#fff", fontSize:15, fontWeight:700, cursor:"pointer", marginTop:20 }}>スクリプトを見る →</button>
           </div>
@@ -1300,6 +1406,11 @@ function PracticeTab({ phrases }) {
                 ))}
               </div>
               {currentPhrase.japanese && <div style={{ fontSize:12, color:C.muted, marginTop:10 }}>{currentPhrase.japanese}</div>}
+            </div>
+            <div style={{ display:"flex", gap:6, justifyContent:"center" }}>
+              {SPEED_OPTIONS.map(opt => (
+                <button key={opt.rate} onClick={() => setSpeechRate(opt.rate)} style={{ padding:"5px 10px", borderRadius:99, border:"none", cursor:"pointer", fontSize:11, fontWeight:700, background: speechRate===opt.rate ? C.primary : C.surface, color: speechRate===opt.rate ? "#fff" : C.muted }}>{opt.label}</button>
+              ))}
             </div>
             <button onClick={playWithHighlight} disabled={isPlaying} style={{ padding:12, borderRadius:10, border:"none", background:isPlaying?C.subtle:C.primary, color:"#fff", fontSize:14, fontWeight:700, cursor:"pointer" }}>{isPlaying ? "再生中…" : "🔊 音声を再生（ハイライト付き）"}</button>
             <button onClick={() => setSubMode("record")} style={{ padding:14, borderRadius:12, border:"none", background:C.accent, color:"#fff", fontSize:15, fontWeight:700, cursor:"pointer" }}>録音してシャドーイング →</button>
@@ -1360,7 +1471,12 @@ function PracticeTab({ phrases }) {
         {dictSubMode === "listen" && (
           <div style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:20 }}>
             <div style={{ fontSize:13, color:C.muted, textAlign:"center" }}>音声を聞いて、聞こえた英語を書きましょう</div>
-            <div onClick={() => speak(currentPhrase.english)} style={{ width:80, height:80, borderRadius:99, background:`linear-gradient(135deg,${C.primary},${C.accent})`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:36, cursor:"pointer", boxShadow:`0 4px 16px ${C.primary}44` }}>🔊</div>
+            <div onClick={() => speak(currentPhrase.english, null, speechRate)} style={{ width:80, height:80, borderRadius:99, background:`linear-gradient(135deg,${C.primary},${C.accent})`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:36, cursor:"pointer", boxShadow:`0 4px 16px ${C.primary}44` }}>🔊</div>
+            <div style={{ display:"flex", gap:6 }}>
+              {SPEED_OPTIONS.map(opt => (
+                <button key={opt.rate} onClick={() => setSpeechRate(opt.rate)} style={{ padding:"5px 10px", borderRadius:99, border:"none", cursor:"pointer", fontSize:11, fontWeight:700, background: speechRate===opt.rate ? C.primary : C.surface, color: speechRate===opt.rate ? "#fff" : C.muted }}>{opt.label}</button>
+              ))}
+            </div>
             <div style={{ fontSize:11, color:C.subtle }}>何度でも再生できます</div>
             <button onClick={() => setDictSubMode("input")} style={{ width:"100%", padding:14, borderRadius:12, border:"none", background:C.primary, color:"#fff", fontSize:15, fontWeight:700, cursor:"pointer", marginTop:20 }}>書き取りを始める →</button>
           </div>
@@ -1369,8 +1485,13 @@ function PracticeTab({ phrases }) {
         {dictSubMode === "input" && (
           <div style={{ flex:1, display:"flex", flexDirection:"column", gap:16 }}>
             <div style={{ background:C.primaryLight, borderRadius:12, padding:12, textAlign:"center" }}>
-              <div style={{ fontSize:12, color:C.primary }}>もう一度聞く場合はタップ</div>
-              <div onClick={() => speak(currentPhrase.english)} style={{ fontSize:28, cursor:"pointer", marginTop:4 }}>🔊</div>
+              <div style={{ fontSize:12, color:C.primary, marginBottom:6 }}>もう一度聞く場合はタップ</div>
+              <div onClick={() => speak(currentPhrase.english, null, speechRate)} style={{ fontSize:28, cursor:"pointer", marginBottom:8 }}>🔊</div>
+              <div style={{ display:"flex", gap:6, justifyContent:"center" }}>
+                {SPEED_OPTIONS.map(opt => (
+                  <button key={opt.rate} onClick={() => setSpeechRate(opt.rate)} style={{ padding:"4px 9px", borderRadius:99, border:"none", cursor:"pointer", fontSize:10, fontWeight:700, background: speechRate===opt.rate ? C.primary : "#fff", color: speechRate===opt.rate ? "#fff" : C.muted }}>{opt.label}</button>
+                ))}
+              </div>
             </div>
             <div style={{ flex:1 }}>
               <div style={{ fontSize:12, color:C.muted, marginBottom:6 }}>聞こえた英語を入力してください</div>
