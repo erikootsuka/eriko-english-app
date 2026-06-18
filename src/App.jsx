@@ -283,6 +283,9 @@ function HomeTab({ phrases, vocab, progress, goals, onNavigate }) {
   }
 
   return (
+    <div style={{ padding:"20px 16px", display:"flex", flexDirection:"column", gap:16 }}>
+      <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+        <div style={{
           width:44, height:44, borderRadius:12,
           background:`linear-gradient(135deg, ${C.primary}, ${C.accent})`,
           display:"flex", alignItems:"center", justifyContent:"center",
