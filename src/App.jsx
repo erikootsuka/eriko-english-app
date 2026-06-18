@@ -291,6 +291,10 @@ function HomeTab({ phrases, vocab, progress, goals, onNavigate, earnedBadges = [
   const [menuChecked, setMenuChecked] = useState({});
   const [menuOpen, setMenuOpen] = useState(false);
 
+  // ---- リマインダー ----
+  const [reminderDismissed, setReminderDismissed] = useState(() => load("eriko_reminder_dismissed", null));
+  const showReminder = reminderDismissed !== today() && todayCount === 0;
+
   async function fetchTodayMenu() {
     setMenuLoading(true);
     try {
@@ -344,6 +348,23 @@ function HomeTab({ phrases, vocab, progress, goals, onNavigate, earnedBadges = [
           </div>
         ))}
       </div>
+
+      {/* ---- リマインダーバナー ---- */}
+      {showReminder && (
+        <div style={{ background:`linear-gradient(135deg,${C.accent},#fb923c)`, borderRadius:12, padding:"12px 14px", display:"flex", alignItems:"center", gap:10 }}>
+          <div style={{ fontSize:24, flexShrink:0 }}>🔔</div>
+          <div style={{ flex:1 }}>
+            <div style={{ fontSize:13, fontWeight:800, color:"#fff" }}>今日はまだ学習していません！</div>
+            <div style={{ fontSize:11, color:"rgba(255,255,255,0.85)", marginTop:2 }}>
+              {streak > 0 ? `🔥 ${streak}日連続中！今日も続けましょう` : "少しだけでも英語に触れてみましょう"}
+            </div>
+          </div>
+          <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
+            <button onClick={() => onNavigate("quiz")} style={{ padding:"5px 10px", borderRadius:8, border:"none", background:"rgba(255,255,255,0.25)", color:"#fff", fontSize:11, fontWeight:700, cursor:"pointer" }}>クイズ ✏️</button>
+            <button onClick={() => { save("eriko_reminder_dismissed", today()); setReminderDismissed(today()); }} style={{ padding:"3px 8px", borderRadius:8, border:"none", background:"transparent", color:"rgba(255,255,255,0.7)", fontSize:10, cursor:"pointer" }}>後で</button>
+          </div>
+        </div>
+      )}
 
       <div style={{ background:C.card, borderRadius:12, padding:14, border:`1px solid ${C.border}` }}>
         <div style={{ fontSize:11, fontWeight:700, color:C.mid, marginBottom:10 }}>📊 レベル別表現数</div>
