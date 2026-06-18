@@ -1244,6 +1244,7 @@ function PracticeTab({ phrases }) {
   const [speechRate, setSpeechRate] = useState(0.9); // 0.7=ゆっくり / 0.9=普通 / 1.1=速い
   const recognitionRef = useRef(null);
   const recordingTimeoutRef = useRef(null);
+  const silenceTimeoutRef = useRef(null);
 
   const SPEED_OPTIONS = [
     { rate: 0.6, label: "🐢 ゆっくり" },
@@ -1257,6 +1258,7 @@ function PracticeTab({ phrases }) {
   useEffect(() => {
     return () => {
       if (recordingTimeoutRef.current) clearTimeout(recordingTimeoutRef.current);
+      if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
       if (recognitionRef.current) {
         try { recognitionRef.current.onend = null; recognitionRef.current.onerror = null; recognitionRef.current.onresult = null; recognitionRef.current.abort(); } catch {}
       }
@@ -1314,16 +1316,37 @@ function PracticeTab({ phrases }) {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     const rec = new SR();
     rec.lang = "en-US";
-    rec.continuous = false;
-    rec.interimResults = false;
+    rec.continuous = true; // 上級の長文でも話し終わるまで認識を継続させる
+    rec.interimResults = true; // 話している間、結果を継続的に受け取り無音検出のタイマーをリセットするため
 
     // 確実にUIを復帰させるための共通クリーンアップ
     const finish = () => {
       setIsRecording(false);
       if (recordingTimeoutRef.current) { clearTimeout(recordingTimeoutRef.current); recordingTimeoutRef.current = null; }
+      if (silenceTimeoutRef.current) { clearTimeout(silenceTimeoutRef.current); silenceTimeoutRef.current = null; }
     };
 
-    rec.onresult = (e) => { setRecordedText(e.results[0][0].transcript); };
+    // 無音が一定時間（3秒）続いたら自動的に録音終了とみなす
+    // 話している間は onresult が発火するたびにこのタイマーが延長されるので、
+    // 長い文章でも話し終えるまで途中で打ち切られない
+    const resetSilenceTimer = () => {
+      if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
+      silenceTimeoutRef.current = setTimeout(() => {
+        try { rec.stop(); } catch {}
+      }, 3000);
+    };
+
+    rec.onresult = (e) => {
+      let finalText = "";
+      let interimText = "";
+      for (let i = 0; i < e.results.length; i++) {
+        const transcript = e.results[i][0].transcript;
+        if (e.results[i].isFinal) finalText += transcript + " ";
+        else interimText += transcript;
+      }
+      setRecordedText((finalText + interimText).trim());
+      resetSilenceTimer();
+    };
     rec.onend = finish;
     rec.onerror = finish;
     recognitionRef.current = rec;
@@ -1337,12 +1360,15 @@ function PracticeTab({ phrases }) {
       return;
     }
 
-    // セーフティネット: 15秒経っても止まらなければ強制終了してUIを復帰
+    resetSilenceTimer();
+
+    // 絶対的な上限（万一無音検出が効かない場合の最終セーフティネット）。
+    // 上級の長文でも十分話し終えられるよう90秒に設定。
     recordingTimeoutRef.current = setTimeout(() => {
       try { rec.stop(); } catch {}
       try { rec.abort(); } catch {}
       finish();
-    }, 15000);
+    }, 90000);
   }
 
   function stopRecording() {
@@ -1357,6 +1383,7 @@ function PracticeTab({ phrases }) {
     // stop/abortのイベントが発火しない場合に備え、UI状態は即座に復帰させる
     setIsRecording(false);
     if (recordingTimeoutRef.current) { clearTimeout(recordingTimeoutRef.current); recordingTimeoutRef.current = null; }
+    if (silenceTimeoutRef.current) { clearTimeout(silenceTimeoutRef.current); silenceTimeoutRef.current = null; }
   }
 
   async function checkShadowing() {
@@ -1473,7 +1500,7 @@ function PracticeTab({ phrases }) {
                 onClick={isRecording ? stopRecording : startRecording}
                 style={{ width:80, height:80, borderRadius:99, border:"none", background:isRecording?C.danger:C.purple, display:"flex", alignItems:"center", justifyContent:"center", fontSize:32, cursor:"pointer", margin:"0 auto", boxShadow:isRecording?`0 0 0 8px ${C.dangerMid}`:`0 4px 16px ${C.purple}44`, transition:"all 0.3s", padding:0 }}
               >{isRecording ? "⏹" : "🎤"}</button>
-              <div style={{ fontSize:12, color:C.muted, marginTop:10 }}>{isRecording ? "録音中… タップで停止" : "タップして録音開始"}</div>
+              <div style={{ fontSize:12, color:C.muted, marginTop:10 }}>{isRecording ? "録音中… 話し終えると自動停止します（タップでも停止可）" : "タップして録音開始"}</div>
               {isRecording && (
                 <button type="button" onClick={stopRecording} style={{ marginTop:12, padding:"8px 20px", borderRadius:10, border:`1px solid ${C.dangerMid}`, background:C.dangerLight, color:C.danger, fontSize:13, fontWeight:700, cursor:"pointer" }}>⏹ 停止する</button>
               )}
