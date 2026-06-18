@@ -11,6 +11,7 @@ const STORAGE = {
   weaknesses: "eriko_weaknesses_v2",
   phraseOfWeek: "eriko_phrase_of_week",
   learningCalendar: "eriko_learning_calendar",
+  pronunciationLog: "eriko_pronunciation_log",
 };
 
 const LEVELS = ["初級", "中級", "上級"];
@@ -1197,8 +1198,16 @@ function PracticeTab({ phrases }) {
       const sys = `You are a pronunciation coach. Compare the original script with what the student said and score accuracy. Return ONLY valid JSON: {"score": 0-100, "feedback": "brief feedback in Japanese", "missed": ["words that were missed or wrong"]}`;
       const resp = await callClaude(sys, `Original: "${currentPhrase.english}"\nStudent said: "${recordedText}"`);
       const m = resp.match(/\{[\s\S]*\}/);
-      if (m) setScore(JSON.parse(m[0]));
-      else setScore({ score: 70, feedback: "採点できませんでした", missed: [] });
+      if (m) {
+        const result = JSON.parse(m[0]);
+        setScore(result);
+        // 発音ログに記録
+        if (result.missed?.length > 0) {
+          savePronunciationLog(result.missed, currentPhrase.english);
+        }
+      } else {
+        setScore({ score: 70, feedback: "採点できませんでした", missed: [] });
+      }
     } catch {
       const orig = currentPhrase.english.toLowerCase().split(" ");
       const said = recordedText.toLowerCase().split(" ");
@@ -1207,6 +1216,13 @@ function PracticeTab({ phrases }) {
     }
     setChecking(false);
     setSubMode("result");
+  }
+
+  function savePronunciationLog(missedWords, phrase) {
+    const existing = load(STORAGE.pronunciationLog, []);
+    const entry = { date: today(), phrase, missed: missedWords };
+    const updated = [entry, ...existing].slice(0, 100); // 最大100件
+    save(STORAGE.pronunciationLog, updated);
   }
 
   async function checkDictation() {
@@ -1427,6 +1443,65 @@ function GoalsTab({ goals, setGoals, progress, weaknesses, phrases, vocab }) {
   const [showAdd, setShowAdd] = useState(false);
   const [showDownload, setShowDownload] = useState(false);
   const [newG, setNewG] = useState({ title:"", target:30, unit:"表現", deadline:"" });
+
+  // ---- 成長レポート ----
+  const [showReport, setShowReport] = useState(false);
+  const [report, setReport] = useState(() => load("eriko_growth_report", null));
+  const [reportLoading, setReportLoading] = useState(false);
+
+  async function generateReport() {
+    setReportLoading(true);
+    try {
+      const diaryEntries = load(STORAGE.diary, []);
+      const totalQuiz = progress.length;
+      const correctQuiz = progress.filter(p => p.correct).length;
+      const quizRate = totalQuiz > 0 ? Math.round((correctQuiz / totalQuiz) * 100) : 0;
+      const recentDiary = diaryEntries.slice(0, 5).map(e => ({
+        date: e.date,
+        corrections: e.corrections?.length || 0,
+        weakPoints: e.weakPoints || [],
+        patterns: e.patterns?.map(p => p.pattern) || [],
+      }));
+      const weakList = weaknesses.slice(0, 10).map(w => w.english);
+      const streakDays = getStreak(progress);
+      const sys = `You are an English learning coach analyzing Eriko's progress. She is a Japanese pharmaceutical regulatory affairs professional learning English. Analyze her learning data and generate a comprehensive growth report in Japanese. Return ONLY valid JSON:
+{
+  "generatedAt": "date string",
+  "overall": "総合評価コメント（2-3文）",
+  "overallScore": 1-10,
+  "skills": {
+    "reading": {"score":1-10, "comment":"読む力の評価（1-2文）"},
+    "writing": {"score":1-10, "comment":"書く力の評価（日記の傾向を含む、1-2文）"},
+    "listening": {"score":1-10, "comment":"聞く力の評価（1-2文）"},
+    "speaking": {"score":1-10, "comment":"話す力の評価（1-2文）"}
+  },
+  "strengths": ["強み1", "強み2"],
+  "improvements": ["改善点1", "改善点2"],
+  "weeklyGoal": "来週取り組むべき具体的なアドバイス（1文）",
+  "encouragement": "励ましのメッセージ（1文）"
+}`;
+      const userData = {
+        streakDays,
+        totalPhrases: phrases.length,
+        totalVocab: vocab.length,
+        quizTotal: totalQuiz,
+        quizCorrectRate: quizRate,
+        weakExpressions: weakList,
+        diaryCount: diaryEntries.length,
+        recentDiarySummary: recentDiary,
+        goals: goals.filter(g => !g.completed).map(g => g.title),
+      };
+      const resp = await callClaude(sys, JSON.stringify(userData));
+      const m = resp.match(/\{[\s\S]*\}/);
+      if (m) {
+        const data = { ...JSON.parse(m[0]), generatedAt: today() };
+        setReport(data);
+        save("eriko_growth_report", data);
+        setShowReport(true);
+      }
+    } catch {}
+    setReportLoading(false);
+  }
   const t = today();
   const todayStudied = [...new Set(progress.filter(p => p.date === t).map(p => p.id))].length;
   const streak = getStreak(progress);
@@ -1452,10 +1527,100 @@ function GoalsTab({ goals, setGoals, progress, weaknesses, phrases, vocab }) {
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
         <h3 style={{ margin:0, fontSize:16, fontWeight:800 }}>🎯 目標と進捗</h3>
         <div style={{ display:"flex", gap:6 }}>
+          <button onClick={() => setShowReport(v => !v)} style={{ background:C.surface, border:"none", borderRadius:8, padding:"6px 10px", fontSize:12, cursor:"pointer", color:C.purple, fontWeight:600 }}>📊 レポート</button>
           <button onClick={() => setShowDownload(v => !v)} style={{ background:C.surface, border:"none", borderRadius:8, padding:"6px 10px", fontSize:12, cursor:"pointer", color:C.mid, fontWeight:600 }}>📥 保存</button>
           <button onClick={() => setShowAdd(true)} style={{ background:C.primary, border:"none", borderRadius:8, padding:"6px 12px", fontSize:12, cursor:"pointer", color:"#fff", fontWeight:600 }}>＋追加</button>
         </div>
       </div>
+      {/* ---- 成長レポート ---- */}
+      {showReport && (
+        <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:14, padding:16, marginBottom:14 }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
+            <div style={{ fontSize:13, fontWeight:800, color:C.slate }}>📊 成長レポート</div>
+            <div style={{ display:"flex", gap:6 }}>
+              <button onClick={generateReport} disabled={reportLoading} style={{ padding:"5px 12px", borderRadius:8, border:"none", background:reportLoading?C.subtle:C.purple, color:"#fff", fontSize:11, fontWeight:700, cursor:"pointer" }}>{reportLoading ? "生成中…" : report ? "🔄 再生成" : "✨ 生成する"}</button>
+            </div>
+          </div>
+
+          {!report && !reportLoading && (
+            <div style={{ textAlign:"center", padding:"20px 0" }}>
+              <div style={{ fontSize:32, marginBottom:8 }}>📊</div>
+              <div style={{ fontSize:13, color:C.muted, marginBottom:4 }}>AIが4技能すべてを分析します</div>
+              <div style={{ fontSize:11, color:C.subtle }}>クイズ・日記・練習のデータをもとに総合評価</div>
+            </div>
+          )}
+
+          {reportLoading && (
+            <div style={{ textAlign:"center", padding:"20px 0", fontSize:13, color:C.muted }}>AIが分析中です… (10〜20秒)</div>
+          )}
+
+          {report && !reportLoading && (
+            <>
+              <div style={{ fontSize:10, color:C.subtle, marginBottom:12 }}>生成日: {report.generatedAt}</div>
+
+              {/* 総合スコア */}
+              <div style={{ background:`linear-gradient(135deg,${C.purple},#a855f7)`, borderRadius:12, padding:14, marginBottom:12, color:"#fff", textAlign:"center" }}>
+                <div style={{ fontSize:36, fontWeight:900 }}>{report.overallScore}<span style={{ fontSize:16 }}>/10</span></div>
+                <div style={{ fontSize:12, marginTop:6, opacity:0.9, lineHeight:1.6 }}>{report.overall}</div>
+              </div>
+
+              {/* 4技能 */}
+              <div style={{ marginBottom:12 }}>
+                <div style={{ fontSize:11, fontWeight:700, color:C.mid, marginBottom:8 }}>4技能スコア</div>
+                {[
+                  { key:"reading", label:"📖 読む", color:C.success },
+                  { key:"writing", label:"✍️ 書く", color:C.primary },
+                  { key:"listening", label:"👂 聞く", color:C.accent },
+                  { key:"speaking", label:"🗣️ 話す", color:C.purple },
+                ].map(skill => {
+                  const s = report.skills?.[skill.key];
+                  if (!s) return null;
+                  return (
+                    <div key={skill.key} style={{ marginBottom:10 }}>
+                      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:3 }}>
+                        <span style={{ fontSize:12, fontWeight:700, color:skill.color }}>{skill.label}</span>
+                        <span style={{ fontSize:12, fontWeight:800, color:skill.color }}>{s.score}/10</span>
+                      </div>
+                      <div style={{ height:6, background:C.border, borderRadius:99, overflow:"hidden", marginBottom:4 }}>
+                        <div style={{ width:`${s.score * 10}%`, height:"100%", background:skill.color, borderRadius:99, transition:"width 0.5s" }} />
+                      </div>
+                      <div style={{ fontSize:11, color:C.muted }}>{s.comment}</div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* 強み・改善点 */}
+              {report.strengths?.length > 0 && (
+                <div style={{ background:C.successLight, border:`1px solid ${C.successMid}`, borderRadius:10, padding:12, marginBottom:10 }}>
+                  <div style={{ fontSize:11, fontWeight:700, color:C.success, marginBottom:6 }}>✨ 強み</div>
+                  {report.strengths.map((s, i) => <div key={i} style={{ fontSize:12, color:"#166534", marginBottom:3 }}>• {s}</div>)}
+                </div>
+              )}
+              {report.improvements?.length > 0 && (
+                <div style={{ background:C.warnLight, border:`1px solid ${C.warnMid}`, borderRadius:10, padding:12, marginBottom:10 }}>
+                  <div style={{ fontSize:11, fontWeight:700, color:C.warn, marginBottom:6 }}>💡 改善ポイント</div>
+                  {report.improvements.map((s, i) => <div key={i} style={{ fontSize:12, color:"#92400e", marginBottom:3 }}>• {s}</div>)}
+                </div>
+              )}
+
+              {/* 来週の目標 & 励まし */}
+              {report.weeklyGoal && (
+                <div style={{ background:C.primaryLight, border:`1px solid ${C.primaryMid}`, borderRadius:10, padding:12, marginBottom:10 }}>
+                  <div style={{ fontSize:11, fontWeight:700, color:C.primary, marginBottom:4 }}>🎯 来週取り組もう</div>
+                  <div style={{ fontSize:12, color:C.primaryDark }}>{report.weeklyGoal}</div>
+                </div>
+              )}
+              {report.encouragement && (
+                <div style={{ background:`linear-gradient(135deg,${C.accentLight},#fff)`, border:`1px solid ${C.accentMid}`, borderRadius:10, padding:12 }}>
+                  <div style={{ fontSize:13, color:C.accent, fontWeight:700 }}>🌟 {report.encouragement}</div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
       {showDownload && (
         <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:12, padding:14, marginBottom:14 }}>
           <div style={{ fontSize:12, fontWeight:700, color:C.mid, marginBottom:10 }}>📥 データをダウンロード</div>
@@ -1475,6 +1640,9 @@ function GoalsTab({ goals, setGoals, progress, weaknesses, phrases, vocab }) {
           {last7.map(d => { const cnt = byDate[d]||0; const max = Math.max(1, ...last7.map(x => byDate[x]||0)); return (<div key={d} style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", gap:3 }}><div style={{ width:"100%", height:Math.max(4,(cnt/max)*50)+"px", background:d===t?C.primary:C.primaryMid, borderRadius:"4px 4px 0 0", transition:"height 0.3s" }} /><div style={{ fontSize:8, color:C.subtle }}>{d.slice(5)}</div></div>); })}
         </div>
       </div>
+
+      {/* ---- 発音チェックメモ ---- */}
+      <PronunciationMemo />
 
       {/* ---- 学習カレンダー ---- */}
       <LearningCalendar progress={progress} />
@@ -1506,6 +1674,91 @@ function GoalsTab({ goals, setGoals, progress, weaknesses, phrases, vocab }) {
           <Field label="期限（任意）"><input type="date" value={newG.deadline} onChange={e => setNewG(g => ({ ...g, deadline:e.target.value }))} style={inp} /></Field>
           <ModalButtons onCancel={() => setShowAdd(false)} onOk={() => { if(!newG.title.trim())return; setGoals(p => [{...newG,id:uid(),current:0,completed:false,createdDate:today()},...p]); setNewG({title:"",target:30,unit:"表現",deadline:""}); setShowAdd(false); }} okLabel="追加する" />
         </Modal>
+      )}
+    </div>
+  );
+}
+
+// ===================== PRONUNCIATION MEMO =====================
+function PronunciationMemo() {
+  const logs = load(STORAGE.pronunciationLog, []);
+
+  // 音のパターン分類
+  const SOUND_PATTERNS = [
+    { key:"th", label:"th音", desc:"think/that など", regex:/\bth\w*/i },
+    { key:"rl", label:"r/l混同", desc:"right/light など", regex:/\b[rl]\w+/i },
+    { key:"vb", label:"v/b混同", desc:"very/berry など", regex:/\b[vb]\w+/i },
+    { key:"si", label:"si/shi混同", desc:"sheet/sit など", regex:/\b(sh|si)\w*/i },
+    { key:"ed", label:"-ed語尾", desc:"walked/wanted など", regex:/\w+ed\b/i },
+    { key:"ing", label:"-ing語尾", desc:"running/working など", regex:/\w+ing\b/i },
+    { key:"long", label:"長い単語", desc:"3音節以上", check: w => w.split(/[aeiou]/i).length >= 4 },
+  ];
+
+  // missedワードを集計
+  const wordCount = {};
+  logs.forEach(log => {
+    (log.missed || []).forEach(word => {
+      const clean = word.toLowerCase().replace(/[^a-z]/g, "");
+      if (clean.length < 2) return;
+      wordCount[clean] = (wordCount[clean] || 0) + 1;
+    });
+  });
+
+  // パターン別カウント
+  const patternCounts = SOUND_PATTERNS.map(pat => {
+    const count = Object.entries(wordCount).filter(([w]) =>
+      pat.regex ? pat.regex.test(w) : pat.check?.(w)
+    ).reduce((sum, [, c]) => sum + c, 0);
+    return { ...pat, count };
+  }).filter(p => p.count > 0).sort((a, b) => b.count - a.count);
+
+  // TOP苦手ワード
+  const topWords = Object.entries(wordCount)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10);
+
+  if (logs.length === 0) return (
+    <div style={{ background:C.card, borderRadius:12, padding:16, marginBottom:14, border:`1px solid ${C.border}`, textAlign:"center" }}>
+      <div style={{ fontSize:28, marginBottom:8 }}>🎙️</div>
+      <div style={{ fontSize:12, fontWeight:700, color:C.mid, marginBottom:4 }}>発音チェックメモ</div>
+      <div style={{ fontSize:11, color:C.subtle }}>シャドーイングを練習すると<br/>苦手な音が自動で記録されます</div>
+    </div>
+  );
+
+  return (
+    <div style={{ background:C.card, borderRadius:12, padding:14, marginBottom:14, border:`1px solid ${C.border}` }}>
+      <div style={{ fontSize:11, fontWeight:700, color:C.mid, marginBottom:10 }}>🎙️ 発音チェックメモ <span style={{ fontSize:9, fontWeight:400, color:C.subtle }}>（シャドーイング {logs.length}回分）</span></div>
+
+      {patternCounts.length > 0 && (
+        <div style={{ marginBottom:12 }}>
+          <div style={{ fontSize:10, color:C.subtle, marginBottom:6 }}>苦手な音のパターン</div>
+          {patternCounts.slice(0, 5).map(pat => (
+            <div key={pat.key} style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6 }}>
+              <div style={{ width:60, fontSize:11, fontWeight:700, color:C.danger, flexShrink:0 }}>{pat.label}</div>
+              <div style={{ flex:1, height:6, background:C.border, borderRadius:99, overflow:"hidden" }}>
+                <div style={{ width:`${Math.min(100, (pat.count / (patternCounts[0]?.count || 1)) * 100)}%`, height:"100%", background:C.danger, borderRadius:99 }} />
+              </div>
+              <div style={{ fontSize:10, color:C.subtle, width:24, textAlign:"right" }}>{pat.count}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {topWords.length > 0 && (
+        <div>
+          <div style={{ fontSize:10, color:C.subtle, marginBottom:6 }}>よく間違える単語 TOP{topWords.length}</div>
+          <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+            {topWords.map(([word, count]) => (
+              <span key={word} style={{ padding:"3px 10px", borderRadius:99, background:C.dangerLight, border:`1px solid ${C.dangerMid}`, fontSize:11, fontWeight:700, color:C.danger }}>
+                {word} <span style={{ fontSize:9, fontWeight:400 }}>×{count}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {patternCounts.length === 0 && topWords.length === 0 && (
+        <div style={{ fontSize:11, color:C.subtle, textAlign:"center", padding:"8px 0" }}>まだデータが蓄積されていません</div>
       )}
     </div>
   );
