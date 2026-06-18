@@ -282,6 +282,33 @@ function HomeTab({ phrases, vocab, progress, goals, onNavigate }) {
     setPowLoading(false);
   }
 
+  // ---- 今日のメニュー提案 ----
+  const [locationMode, setLocationMode] = useState("home");
+  const [menuTasks, setMenuTasks] = useState(() => load("eriko_today_menu_" + today(), null));
+  const [menuLoading, setMenuLoading] = useState(false);
+  const [menuChecked, setMenuChecked] = useState({});
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  async function fetchTodayMenu() {
+    setMenuLoading(true);
+    try {
+      const diaryCount = load(STORAGE.diary, []).length;
+      const quizCount = progress.filter(p => p.date === today()).length;
+      const weakCount = load(STORAGE.weaknesses, []).length;
+      const isTrain = locationMode === "train";
+      const sys = `You are an English learning coach for Eriko, a Japanese pharmaceutical regulatory affairs professional who loves scuba diving. Suggest 3-5 learning tasks for today. ${isTrain ? "She is on a TRAIN, so NO audio/speaking tasks (no shadowing, no dictation, no roleplay speaking)." : "She is at HOME, so all task types are available."} Consider her current stats: diary entries=${diaryCount}, today's quiz=${quizCount}, weak points=${weakCount}. Return ONLY valid JSON array: [{"task":"タスク名","icon":"emoji","minutes":5,"type":"quiz|diary|phrase|vocab|shadowing|dictation|roleplay","description":"一言説明（日本語）","tab":"quiz|diary|phrases|practice|vocab|roleplay"}]`;
+      const resp = await callClaude(sys, `Today is ${today()}. Location: ${isTrain ? "train" : "home"}. Suggest tasks.`);
+      const m = resp.match(/\[[\s\S]*\]/);
+      if (m) {
+        const tasks = JSON.parse(m[0]);
+        setMenuTasks(tasks);
+        setMenuChecked({});
+        save("eriko_today_menu_" + today(), tasks);
+      }
+    } catch {}
+    setMenuLoading(false);
+  }
+
   return (
     <div style={{ padding:"20px 16px", display:"flex", flexDirection:"column", gap:16 }}>
       <div style={{ display:"flex", alignItems:"center", gap:12 }}>
@@ -339,6 +366,61 @@ function HomeTab({ phrases, vocab, progress, goals, onNavigate }) {
           <div style={{ fontSize:11, color:C.primaryDark, marginTop:4 }}>{activeGoal.current} / {activeGoal.target} {activeGoal.unit}</div>
         </div>
       )}
+
+      {/* ---- 今日のメニュー提案 ---- */}
+      <div style={{ background:C.card, borderRadius:14, border:`1px solid ${C.border}`, overflow:"hidden" }}>
+        <div style={{ padding:"12px 14px", display:"flex", alignItems:"center", gap:10, cursor:"pointer" }} onClick={() => setMenuOpen(v => !v)}>
+          <div style={{ fontSize:20 }}>📋</div>
+          <div style={{ flex:1 }}>
+            <div style={{ fontSize:13, fontWeight:800, color:C.slate }}>今日のメニュー</div>
+            <div style={{ fontSize:10, color:C.muted }}>{menuTasks ? `${menuTasks.length}タスク提案済み` : "AIが学習メニューを提案します"}</div>
+          </div>
+          {/* 場所モード切替 */}
+          <div style={{ display:"flex", gap:4 }}>
+            {[["home","🏠"],["train","🚃"]].map(([v,icon]) => (
+              <button key={v} onClick={e => { e.stopPropagation(); setLocationMode(v); setMenuTasks(null); }} style={{ padding:"4px 8px", borderRadius:8, border:"none", fontSize:12, cursor:"pointer", fontWeight:700, background: locationMode===v ? C.primary : C.surface, color: locationMode===v ? "#fff" : C.muted }}>{icon}</button>
+            ))}
+          </div>
+          <div style={{ fontSize:12, color:C.subtle }}>{menuOpen ? "▲" : "▼"}</div>
+        </div>
+
+        {menuOpen && (
+          <div style={{ borderTop:`1px solid ${C.border}`, padding:"12px 14px" }}>
+            {!menuTasks && !menuLoading && (
+              <div style={{ textAlign:"center", padding:"8px 0" }}>
+                <div style={{ fontSize:12, color:C.muted, marginBottom:12 }}>{locationMode === "train" ? "🚃 電車中モード（音声なし）" : "🏠 自宅モード（全タスク）"}で提案します</div>
+                <button onClick={fetchTodayMenu} style={{ padding:"10px 24px", borderRadius:10, border:"none", background:C.primary, color:"#fff", fontSize:13, fontWeight:700, cursor:"pointer" }}>✨ 今日のメニューを作る</button>
+              </div>
+            )}
+            {menuLoading && (
+              <div style={{ textAlign:"center", padding:"12px 0", fontSize:12, color:C.muted }}>AIがメニューを考えています…</div>
+            )}
+            {menuTasks && !menuLoading && (
+              <>
+                <div style={{ fontSize:10, color:C.muted, marginBottom:10 }}>{locationMode === "train" ? "🚃 電車中モード" : "🏠 自宅モード"} • {today()}</div>
+                {menuTasks.map((task, i) => (
+                  <div key={i} onClick={() => setMenuChecked(prev => ({ ...prev, [i]: !prev[i] }))} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 10px", borderRadius:10, marginBottom:6, background: menuChecked[i] ? C.successLight : C.surface, border:`1px solid ${menuChecked[i] ? C.successMid : C.border}`, cursor:"pointer", transition:"all 0.2s" }}>
+                    <div style={{ width:20, height:20, borderRadius:99, border:`2px solid ${menuChecked[i] ? C.success : C.border}`, background: menuChecked[i] ? C.success : "transparent", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
+                      {menuChecked[i] && <span style={{ color:"#fff", fontSize:11, fontWeight:900 }}>✓</span>}
+                    </div>
+                    <div style={{ fontSize:18, flexShrink:0 }}>{task.icon}</div>
+                    <div style={{ flex:1 }}>
+                      <div style={{ fontSize:12, fontWeight:700, color: menuChecked[i] ? C.success : C.slate, textDecoration: menuChecked[i] ? "line-through" : "none" }}>{task.task}</div>
+                      <div style={{ fontSize:10, color:C.muted }}>{task.description}</div>
+                    </div>
+                    <div style={{ fontSize:10, color:C.subtle, flexShrink:0 }}>{task.minutes}分</div>
+                    <button onClick={e => { e.stopPropagation(); onNavigate(task.tab); }} style={{ padding:"3px 8px", borderRadius:6, border:"none", background:C.primaryLight, color:C.primary, fontSize:10, fontWeight:700, cursor:"pointer", flexShrink:0 }}>→</button>
+                  </div>
+                ))}
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginTop:8 }}>
+                  <div style={{ fontSize:10, color:C.subtle }}>{Object.values(menuChecked).filter(Boolean).length} / {menuTasks.length} 完了</div>
+                  <button onClick={() => { setMenuTasks(null); setMenuChecked({}); fetchTodayMenu(); }} style={{ fontSize:10, color:C.muted, background:"none", border:"none", cursor:"pointer" }}>🔄 作り直す</button>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* ---- 今週の一言フレーズ ---- */}
       <div style={{ background:`linear-gradient(135deg,#0c4a6e,${C.primary})`, borderRadius:14, padding:16, color:"#fff", position:"relative", overflow:"hidden" }}>
