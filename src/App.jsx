@@ -1243,6 +1243,7 @@ function PracticeTab({ phrases }) {
   const [checking, setChecking] = useState(false);
   const [speechRate, setSpeechRate] = useState(0.9); // 0.7=ゆっくり / 0.9=普通 / 1.1=速い
   const recognitionRef = useRef(null);
+  const recordingTimeoutRef = useRef(null);
 
   const SPEED_OPTIONS = [
     { rate: 0.6, label: "🐢 ゆっくり" },
@@ -1251,6 +1252,16 @@ function PracticeTab({ phrases }) {
   ];
 
   const filtered = cat === "すべて" ? phrases : phrases.filter(p => p.category === cat);
+
+  // アンマウント時に音声認識・タイマーを確実に破棄（画面遷移でフリーズしないように）
+  useEffect(() => {
+    return () => {
+      if (recordingTimeoutRef.current) clearTimeout(recordingTimeoutRef.current);
+      if (recognitionRef.current) {
+        try { recognitionRef.current.onend = null; recognitionRef.current.onerror = null; recognitionRef.current.onresult = null; recognitionRef.current.abort(); } catch {}
+      }
+    };
+  }, []);
 
   function pickRandom() {
     if (filtered.length === 0) return null;
@@ -1295,23 +1306,57 @@ function PracticeTab({ phrases }) {
       alert("このブラウザは音声認識に対応していません。Chromeをお試しください。");
       return;
     }
+    // 念のため既存の認識インスタンスを破棄
+    if (recognitionRef.current) {
+      try { recognitionRef.current.onend = null; recognitionRef.current.onerror = null; recognitionRef.current.onresult = null; recognitionRef.current.abort(); } catch {}
+      recognitionRef.current = null;
+    }
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     const rec = new SR();
     rec.lang = "en-US";
     rec.continuous = false;
     rec.interimResults = false;
+
+    // 確実にUIを復帰させるための共通クリーンアップ
+    const finish = () => {
+      setIsRecording(false);
+      if (recordingTimeoutRef.current) { clearTimeout(recordingTimeoutRef.current); recordingTimeoutRef.current = null; }
+    };
+
     rec.onresult = (e) => { setRecordedText(e.results[0][0].transcript); };
-    rec.onend = () => { setIsRecording(false); };
-    rec.onerror = () => { setIsRecording(false); };
+    rec.onend = finish;
+    rec.onerror = finish;
     recognitionRef.current = rec;
-    rec.start();
-    setIsRecording(true);
-    setRecordedText("");
+
+    try {
+      rec.start();
+      setIsRecording(true);
+      setRecordedText("");
+    } catch {
+      finish();
+      return;
+    }
+
+    // セーフティネット: 15秒経っても止まらなければ強制終了してUIを復帰
+    recordingTimeoutRef.current = setTimeout(() => {
+      try { rec.stop(); } catch {}
+      try { rec.abort(); } catch {}
+      finish();
+    }, 15000);
   }
 
   function stopRecording() {
-    recognitionRef.current?.stop();
+    const rec = recognitionRef.current;
+    if (rec) {
+      try { rec.stop(); } catch {}
+      // stop()が機能しない端末向けに少し待ってabort()でも強制終了
+      setTimeout(() => {
+        if (isRecording) { try { rec.abort(); } catch {} }
+      }, 400);
+    }
+    // stop/abortのイベントが発火しない場合に備え、UI状態は即座に復帰させる
     setIsRecording(false);
+    if (recordingTimeoutRef.current) { clearTimeout(recordingTimeoutRef.current); recordingTimeoutRef.current = null; }
   }
 
   async function checkShadowing() {
@@ -1372,7 +1417,7 @@ function PracticeTab({ phrases }) {
     return (
       <div style={{ padding:"16px", display:"flex", flexDirection:"column", height:"100%" }}>
         <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14 }}>
-          <button onClick={() => { stopSpeaking(); setMode("select"); }} style={{ background:"none", border:"none", cursor:"pointer", fontSize:20, color:C.muted }}>←</button>
+          <button onClick={() => { stopSpeaking(); if (isRecording) stopRecording(); setMode("select"); }} style={{ background:"none", border:"none", cursor:"pointer", fontSize:20, color:C.muted }}>←</button>
           <h3 style={{ margin:0, fontSize:16, fontWeight:800 }}>🎤 シャドーイング</h3>
           <span style={{ marginLeft:"auto", fontSize:10, padding:"2px 8px", borderRadius:99, background:levelBg(currentPhrase.level), color:levelColor(currentPhrase.level), fontWeight:700 }}>{currentPhrase.level}</span>
         </div>
@@ -1423,8 +1468,15 @@ function PracticeTab({ phrases }) {
               <div style={{ fontSize:13, fontWeight:700, color:C.slate, lineHeight:1.8 }}>{currentPhrase.english}</div>
             </div>
             <div style={{ textAlign:"center" }}>
-              <div onClick={isRecording ? stopRecording : startRecording} style={{ width:80, height:80, borderRadius:99, background:isRecording?C.danger:C.purple, display:"flex", alignItems:"center", justifyContent:"center", fontSize:32, cursor:"pointer", margin:"0 auto", boxShadow:isRecording?`0 0 0 8px ${C.dangerMid}`:`0 4px 16px ${C.purple}44`, transition:"all 0.3s" }}>🎤</div>
-              <div style={{ fontSize:12, color:C.muted, marginTop:10 }}>{isRecording ? "録音中… もう一度タップで停止" : "タップして録音開始"}</div>
+              <button
+                type="button"
+                onClick={isRecording ? stopRecording : startRecording}
+                style={{ width:80, height:80, borderRadius:99, border:"none", background:isRecording?C.danger:C.purple, display:"flex", alignItems:"center", justifyContent:"center", fontSize:32, cursor:"pointer", margin:"0 auto", boxShadow:isRecording?`0 0 0 8px ${C.dangerMid}`:`0 4px 16px ${C.purple}44`, transition:"all 0.3s", padding:0 }}
+              >{isRecording ? "⏹" : "🎤"}</button>
+              <div style={{ fontSize:12, color:C.muted, marginTop:10 }}>{isRecording ? "録音中… タップで停止" : "タップして録音開始"}</div>
+              {isRecording && (
+                <button type="button" onClick={stopRecording} style={{ marginTop:12, padding:"8px 20px", borderRadius:10, border:`1px solid ${C.dangerMid}`, background:C.dangerLight, color:C.danger, fontSize:13, fontWeight:700, cursor:"pointer" }}>⏹ 停止する</button>
+              )}
             </div>
             {recordedText && (
               <div style={{ background:C.surface, borderRadius:10, padding:12, border:`1px solid ${C.border}` }}>
