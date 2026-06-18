@@ -12,6 +12,7 @@ const STORAGE = {
   phraseOfWeek: "eriko_phrase_of_week",
   learningCalendar: "eriko_learning_calendar",
   pronunciationLog: "eriko_pronunciation_log",
+  badges: "eriko_badges",
 };
 
 const LEVELS = ["初級", "中級", "上級"];
@@ -245,7 +246,7 @@ function Nav({ active, onChange }) {
 }
 
 // ===================== HOME TAB =====================
-function HomeTab({ phrases, vocab, progress, goals, onNavigate }) {
+function HomeTab({ phrases, vocab, progress, goals, onNavigate, earnedBadges = [] }) {
   const t = today();
   const todayCount = progress.filter(p => p.date===t).length;
   const streak = getStreak(progress);
@@ -324,9 +325,9 @@ function HomeTab({ phrases, vocab, progress, goals, onNavigate }) {
           <p style={{ margin:0, color:C.muted, fontSize:12 }}>おかえりなさい</p>
           <h2 style={{ margin:"2px 0 0", fontSize:20, color:C.slate, fontWeight:800, letterSpacing:"-0.5px" }}>Eriko's English</h2>
         </div>
-        {/* FIX: バージョン表示 */}
-        <div style={{ marginLeft:"auto", fontSize:9, color:C.subtle, textAlign:"right" }}>
-          v{BUILD_VERSION}
+        <div style={{ marginLeft:"auto", textAlign:"right" }}>
+          <div style={{ fontSize:11, fontWeight:800, color:getUserTitle(earnedBadges.length).color }}>⭐ {getUserTitle(earnedBadges.length).label}</div>
+          <div style={{ fontSize:9, color:C.subtle }}>v{BUILD_VERSION}</div>
         </div>
       </div>
 
@@ -1439,7 +1440,7 @@ function PracticeTab({ phrases }) {
 }
 
 // ===================== GOALS TAB =====================
-function GoalsTab({ goals, setGoals, progress, weaknesses, phrases, vocab }) {
+function GoalsTab({ goals, setGoals, progress, weaknesses, phrases, vocab, earnedBadges = [], onGoalComplete }) {
   const [showAdd, setShowAdd] = useState(false);
   const [showDownload, setShowDownload] = useState(false);
   const [newG, setNewG] = useState({ title:"", target:30, unit:"表現", deadline:"" });
@@ -1532,6 +1533,61 @@ function GoalsTab({ goals, setGoals, progress, weaknesses, phrases, vocab }) {
           <button onClick={() => setShowAdd(true)} style={{ background:C.primary, border:"none", borderRadius:8, padding:"6px 12px", fontSize:12, cursor:"pointer", color:"#fff", fontWeight:600 }}>＋追加</button>
         </div>
       </div>
+      {/* ---- 称号・バッジ ---- */}
+      {(() => {
+        const title = getUserTitle(earnedBadges.length);
+        const earned = BADGE_DEFS.filter(b => earnedBadges.includes(b.id));
+        const notEarned = BADGE_DEFS.filter(b => !earnedBadges.includes(b.id));
+        return (
+          <div style={{ background:C.card, borderRadius:14, padding:14, marginBottom:14, border:`1px solid ${C.border}` }}>
+            <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12 }}>
+              <div style={{ flex:1 }}>
+                <div style={{ fontSize:11, color:C.subtle }}>現在の称号</div>
+                <div style={{ fontSize:18, fontWeight:900, color:title.color }}>⭐ {title.label}</div>
+              </div>
+              <div style={{ textAlign:"right" }}>
+                <div style={{ fontSize:11, color:C.subtle }}>バッジ</div>
+                <div style={{ fontSize:18, fontWeight:800, color:C.slate }}>{earned.length}<span style={{ fontSize:11, color:C.subtle }}>/{BADGE_DEFS.length}</span></div>
+              </div>
+            </div>
+            {/* 称号進捗バー */}
+            <div style={{ marginBottom:12 }}>
+              <div style={{ height:6, background:C.border, borderRadius:99, overflow:"hidden" }}>
+                <div style={{ width:`${(earnedBadges.length / BADGE_DEFS.length) * 100}%`, height:"100%", background:title.color, borderRadius:99, transition:"width 0.5s" }} />
+              </div>
+            </div>
+            {/* 獲得済みバッジ */}
+            {earned.length > 0 && (
+              <div style={{ marginBottom:10 }}>
+                <div style={{ fontSize:10, color:C.subtle, marginBottom:6 }}>獲得済み</div>
+                <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+                  {earned.map(b => (
+                    <div key={b.id} title={b.desc} style={{ background:C.successLight, border:`1px solid ${C.successMid}`, borderRadius:10, padding:"4px 10px", display:"flex", alignItems:"center", gap:4 }}>
+                      <span style={{ fontSize:14 }}>{b.icon}</span>
+                      <span style={{ fontSize:10, fontWeight:700, color:C.success }}>{b.name}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {/* 未獲得バッジ */}
+            {notEarned.length > 0 && (
+              <div>
+                <div style={{ fontSize:10, color:C.subtle, marginBottom:6 }}>次のバッジ</div>
+                <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+                  {notEarned.slice(0, 4).map(b => (
+                    <div key={b.id} title={b.desc} style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:10, padding:"4px 10px", display:"flex", alignItems:"center", gap:4, opacity:0.6 }}>
+                      <span style={{ fontSize:14, filter:"grayscale(1)" }}>{b.icon}</span>
+                      <span style={{ fontSize:10, color:C.subtle }}>{b.name}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
       {/* ---- 成長レポート ---- */}
       {showReport && (
         <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:14, padding:16, marginBottom:14 }}>
@@ -1656,7 +1712,7 @@ function GoalsTab({ goals, setGoals, progress, weaknesses, phrases, vocab }) {
             <div style={{ display:"flex", gap:6 }}>
               <button onClick={() => setGoals(p => p.map(x => x.id===g.id?{...x,current:Math.max(0,x.current-1)}:x))} style={{ background:C.surface,border:"none",borderRadius:6,width:28,height:28,cursor:"pointer",fontWeight:700,color:C.muted }}>−</button>
               <button onClick={() => setGoals(p => p.map(x => x.id===g.id?{...x,current:Math.min(x.target,x.current+1)}:x))} style={{ background:C.primaryLight,border:"none",borderRadius:6,width:28,height:28,cursor:"pointer",fontWeight:700,color:C.primary }}>＋</button>
-              {pct >= 100 && <button onClick={() => setGoals(p => p.map(x => x.id===g.id?{...x,completed:true}:x))} style={{ background:C.success,border:"none",borderRadius:6,padding:"0 8px",cursor:"pointer",color:"#fff",fontSize:11,fontWeight:700 }}>達成！</button>}
+              {pct >= 100 && <button onClick={() => onGoalComplete ? onGoalComplete(g.id) : setGoals(p => p.map(x => x.id===g.id?{...x,completed:true}:x))} style={{ background:C.success,border:"none",borderRadius:6,padding:"0 8px",cursor:"pointer",color:"#fff",fontSize:11,fontWeight:700 }}>達成！</button>}
             </div>
           </div>
         </div>
@@ -1846,6 +1902,98 @@ function LearningCalendar({ progress }) {
         </div>
       </div>
     </div>
+  );
+}
+
+// ===================== BADGES & TITLES =====================
+const BADGE_DEFS = [
+  { id:"streak3",   icon:"🔥", name:"3日連続",      desc:"3日連続で学習",         check:(p,g,ph,v,d) => getStreak(p) >= 3 },
+  { id:"streak7",   icon:"⚡", name:"7日連続",      desc:"7日連続で学習",         check:(p,g,ph,v,d) => getStreak(p) >= 7 },
+  { id:"streak30",  icon:"💎", name:"30日連続",     desc:"30日連続で学習",        check:(p,g,ph,v,d) => getStreak(p) >= 30 },
+  { id:"phrase10",  icon:"📚", name:"表現10個",     desc:"表現集に10個登録",      check:(p,g,ph,v,d) => ph.length >= 10 },
+  { id:"phrase50",  icon:"📖", name:"表現50個",     desc:"表現集に50個登録",      check:(p,g,ph,v,d) => ph.length >= 50 },
+  { id:"phrase100", icon:"🏛️", name:"表現100個",    desc:"表現集に100個登録",     check:(p,g,ph,v,d) => ph.length >= 100 },
+  { id:"quiz10",    icon:"✏️", name:"クイズ10回",   desc:"クイズを10回完了",      check:(p,g,ph,v,d) => p.length >= 10 },
+  { id:"quiz100",   icon:"🎯", name:"クイズ100回",  desc:"クイズを100回完了",     check:(p,g,ph,v,d) => p.length >= 100 },
+  { id:"diary1",    icon:"📔", name:"初日記",       desc:"日記を初めて書く",      check:(p,g,ph,v,d) => d >= 1 },
+  { id:"diary10",   icon:"✍️", name:"日記10回",     desc:"日記を10回書く",        check:(p,g,ph,v,d) => d >= 10 },
+  { id:"vocab10",   icon:"🔤", name:"語彙10個",     desc:"語彙を10個登録",        check:(p,g,ph,v,d) => v.length >= 10 },
+  { id:"goal1",     icon:"🏆", name:"目標達成",     desc:"目標を1つ達成",         check:(p,g,ph,v,d) => g.some(x => x.completed) },
+];
+
+const TITLE_DEFS = [
+  { minBadges:0,  label:"ビギナー",     color:C.subtle },
+  { minBadges:2,  label:"学習者",       color:C.success },
+  { minBadges:5,  label:"英語好き",     color:C.primary },
+  { minBadges:8,  label:"中級者",       color:C.warn },
+  { minBadges:11, label:"上級者",       color:C.danger },
+  { minBadges:12, label:"マスター",     color:C.purple },
+];
+
+function getUserTitle(earnedCount) {
+  let title = TITLE_DEFS[0];
+  for (const t of TITLE_DEFS) { if (earnedCount >= t.minBadges) title = t; }
+  return title;
+}
+
+// ===================== CONFETTI =====================
+function Confetti({ onDone }) {
+  const canvasRef = useRef(null);
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    canvas.width = canvas.offsetWidth;
+    canvas.height = canvas.offsetHeight;
+    const pieces = Array.from({ length: 80 }, () => ({
+      x: Math.random() * canvas.width,
+      y: -10 - Math.random() * 100,
+      r: 4 + Math.random() * 6,
+      d: 2 + Math.random() * 3,
+      color: ["#0ea5e9","#f97316","#16a34a","#7c3aed","#dc2626","#fbbf24"][Math.floor(Math.random()*6)],
+      tilt: Math.random() * 10 - 5,
+      tiltSpeed: 0.1 + Math.random() * 0.2,
+    }));
+    let frame = 0;
+    const animate = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      pieces.forEach(p => {
+        p.y += p.d;
+        p.tilt += p.tiltSpeed;
+        ctx.beginPath();
+        ctx.ellipse(p.x, p.y, p.r, p.r * 0.5, p.tilt, 0, Math.PI * 2);
+        ctx.fillStyle = p.color;
+        ctx.fill();
+        if (p.y > canvas.height) { p.y = -10; p.x = Math.random() * canvas.width; }
+      });
+      frame++;
+      if (frame < 150) requestAnimationFrame(animate);
+      else onDone?.();
+    };
+    requestAnimationFrame(animate);
+  }, []);
+  return (
+    <div style={{ position:"fixed", inset:0, zIndex:100, pointerEvents:"none" }}>
+      <canvas ref={canvasRef} style={{ width:"100%", height:"100%", display:"block" }} />
+    </div>
+  );
+}
+
+// ===================== GOAL CELEBRATION MODAL =====================
+function GoalCelebration({ goal, onClose }) {
+  return (
+    <>
+      <Confetti onDone={() => {}} />
+      <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.5)", zIndex:99, display:"flex", alignItems:"center", justifyContent:"center", padding:20 }}>
+        <div style={{ background:C.card, borderRadius:20, padding:28, textAlign:"center", maxWidth:320, width:"100%", boxShadow:"0 20px 60px rgba(0,0,0,0.3)" }}>
+          <div style={{ fontSize:56, marginBottom:8 }}>🎉</div>
+          <div style={{ fontSize:20, fontWeight:900, color:C.slate, marginBottom:6 }}>目標達成！</div>
+          <div style={{ fontSize:15, fontWeight:700, color:C.primary, marginBottom:4 }}>🏆 {goal.title}</div>
+          <div style={{ fontSize:13, color:C.muted, marginBottom:20 }}>{goal.target} {goal.unit} 達成おめでとうございます！</div>
+          <button onClick={onClose} style={{ width:"100%", padding:14, borderRadius:12, border:"none", background:`linear-gradient(135deg,${C.primary},${C.accent})`, color:"#fff", fontSize:15, fontWeight:700, cursor:"pointer" }}>ありがとう！🎊</button>
+        </div>
+      </div>
+    </>
   );
 }
 
@@ -2098,6 +2246,9 @@ export default function App() {
   const [goals, setGoals] = useState(() => load(STORAGE.goals, []));
   const [progress, setProgress] = useState(() => load(STORAGE.progress, []));
   const [weaknesses, setWeaknesses] = useState(() => load(STORAGE.weaknesses, []));
+  const [earnedBadges, setEarnedBadges] = useState(() => load(STORAGE.badges, []));
+  const [newBadge, setNewBadge] = useState(null);
+  const [celebrationGoal, setCelebrationGoal] = useState(null);
 
   useEffect(() => { save(STORAGE.phrases, phrases); }, [phrases]);
   useEffect(() => { save(STORAGE.vocab, vocab); }, [vocab]);
@@ -2105,15 +2256,37 @@ export default function App() {
   useEffect(() => { save(STORAGE.progress, progress); }, [progress]);
   useEffect(() => { save(STORAGE.weaknesses, weaknesses); }, [weaknesses]);
 
+  // バッジチェック
+  useEffect(() => {
+    const diaryCount = load(STORAGE.diary, []).length;
+    const newlyEarned = BADGE_DEFS.filter(b =>
+      !earnedBadges.includes(b.id) &&
+      b.check(progress, goals, phrases, vocab, diaryCount)
+    );
+    if (newlyEarned.length > 0) {
+      const updated = [...earnedBadges, ...newlyEarned.map(b => b.id)];
+      setEarnedBadges(updated);
+      save(STORAGE.badges, updated);
+      setNewBadge(newlyEarned[0]);
+    }
+  }, [progress, goals, phrases, vocab]);
+
+  // 目標達成チェック - ゴールが完了した瞬間に祝う
+  function handleGoalComplete(goalId) {
+    const goal = goals.find(g => g.id === goalId);
+    if (goal) setCelebrationGoal(goal);
+    setGoals(prev => prev.map(g => g.id === goalId ? { ...g, completed: true } : g));
+  }
+
   const renderTab = () => {
     switch(tab) {
-      case "home":     return <HomeTab phrases={phrases} vocab={vocab} progress={progress} goals={goals} onNavigate={setTab} />;
+      case "home":     return <HomeTab phrases={phrases} vocab={vocab} progress={progress} goals={goals} onNavigate={setTab} earnedBadges={earnedBadges} />;
       case "phrases":  return <PhrasesTab phrases={phrases} setPhrases={setPhrases} />;
       case "practice": return <PracticeTab phrases={phrases} />;
       case "quiz":     return <QuizTab phrases={phrases} vocab={vocab} setProgress={setProgress} weaknesses={weaknesses} setWeaknesses={setWeaknesses} />;
       case "diary":    return <DiaryTab setPhrases={setPhrases} weaknesses={weaknesses} />;
       case "roleplay": return <RoleplayTab />;
-      case "goals":    return <GoalsTab goals={goals} setGoals={setGoals} progress={progress} weaknesses={weaknesses} phrases={phrases} vocab={vocab} />;
+      case "goals":    return <GoalsTab goals={goals} setGoals={setGoals} progress={progress} weaknesses={weaknesses} phrases={phrases} vocab={vocab} earnedBadges={earnedBadges} onGoalComplete={handleGoalComplete} />;
       case "vocab":     return <VocabTab vocab={vocab} setVocab={setVocab} />;
       case "vocab_add": return <VocabTab vocab={vocab} setVocab={setVocab} autoOpen={true} />;
       default:         return null;
@@ -2124,6 +2297,23 @@ export default function App() {
     <div style={{ maxWidth:430, margin:"0 auto", height:"100vh", display:"flex", flexDirection:"column", fontFamily:"-apple-system,'Hiragino Sans','Yu Gothic',sans-serif", background:C.bg, overflow:"hidden" }}>
       <div style={{ flex:1, overflowY:"auto" }}>{renderTab()}</div>
       <Nav active={tab} onChange={setTab} />
+
+      {/* 新バッジ通知 */}
+      {newBadge && (
+        <div style={{ position:"fixed", top:20, left:"50%", transform:"translateX(-50%)", zIndex:200, background:C.slate, borderRadius:14, padding:"12px 20px", display:"flex", alignItems:"center", gap:10, boxShadow:"0 8px 32px rgba(0,0,0,0.3)", animation:"slideDown 0.4s ease" }}>
+          <span style={{ fontSize:28 }}>{newBadge.icon}</span>
+          <div>
+            <div style={{ fontSize:11, color:C.subtle }}>バッジ獲得！</div>
+            <div style={{ fontSize:14, fontWeight:800, color:"#fff" }}>{newBadge.name}</div>
+          </div>
+          <button onClick={() => setNewBadge(null)} style={{ background:"none", border:"none", color:C.subtle, cursor:"pointer", fontSize:18, marginLeft:8 }}>×</button>
+        </div>
+      )}
+
+      {/* 目標達成おめでとう */}
+      {celebrationGoal && (
+        <GoalCelebration goal={celebrationGoal} onClose={() => setCelebrationGoal(null)} />
+      )}
     </div>
   );
 }
