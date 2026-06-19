@@ -154,6 +154,55 @@ async function callClaude(systemPrompt, userMessage) {
 // ===================== ROBUST JSON PARSING =====================
 // AIの応答からJSONを抽出してパースする。よくある崩れ方（コードブロック混入、
 // 制御文字、末尾カンマ、文字列内の生改行など）を段階的に補正してから再試行する。
+
+// JSON文字列値の内部に、AIが律儀にエスケープし忘れた生のダブルクオート
+// （例: "Oyakata!" のような引用がそのまま値に混入したケース）があると、
+// その時点でJSON構文が破綻する。これを補正するため、構造上の区切り文字
+// として使われている " 以外の " を全てエスケープする。
+function fixUnescapedQuotesInStrings(str) {
+  let result = "";
+  let inString = false;
+  let i = 0;
+  while (i < str.length) {
+    const ch = str[i];
+    if (ch === "\\" && inString) {
+      // 既存のエスケープシーケンスはそのまま通す
+      result += ch + (str[i + 1] || "");
+      i += 2;
+      continue;
+    }
+    if (ch === '"') {
+      if (!inString) {
+        // 文字列の開始
+        inString = true;
+        result += ch;
+        i++;
+        continue;
+      }
+      // 文字列の中で " が出てきた。次の非空白文字を見て、これが
+      // 「本当の終端」か「中身に混入した生の引用符」かを判定する。
+      let j = i + 1;
+      while (j < str.length && /\s/.test(str[j])) j++;
+      const next = str[j];
+      // 終端の後に続いて自然なのは : , } ] のいずれか（あるいは文字列の末尾）
+      const looksLikeTerminator = next === undefined || next === ":" || next === "," || next === "}" || next === "]";
+      if (looksLikeTerminator) {
+        inString = false;
+        result += ch;
+        i++;
+        continue;
+      }
+      // 終端らしくない → 値の中に混入した生の引用符としてエスケープする
+      result += '\\"';
+      i++;
+      continue;
+    }
+    result += ch;
+    i++;
+  }
+  return result;
+}
+
 function tryParseJSON(raw) {
   if (!raw) return null;
   const attempts = [];
@@ -172,11 +221,14 @@ function tryParseJSON(raw) {
     if (!candidate) continue;
     try { return JSON.parse(candidate); } catch {}
     // 補正を試す: 制御文字除去・末尾カンマ除去
+    const cleaned = candidate
+      .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "") // 制御文字除去（\n,\tは残す）
+      .replace(/,\s*([}\]])/g, "$1"); // 末尾カンマ除去
+    try { return JSON.parse(cleaned); } catch {}
+    // さらに補正: 文字列内に混入した生のダブルクオートをエスケープ
     try {
-      const cleaned = candidate
-        .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "") // 制御文字除去（\n,\tは残す）
-        .replace(/,\s*([}\]])/g, "$1"); // 末尾カンマ除去
-      return JSON.parse(cleaned);
+      const fixed = fixUnescapedQuotesInStrings(cleaned);
+      return JSON.parse(fixed);
     } catch {}
   }
   return null;
@@ -1267,7 +1319,7 @@ function DiaryTab({ setPhrases, weaknesses }) {
     setLoading(true); setError(""); setLoadingMsg("AIが添削中… (10〜20秒)");
     try {
       const weakList = weaknesses.map(w => w.english).join(", ");
-      const sys = `You are an English teacher for Eriko, a Japanese pharmaceutical regulatory affairs professional. She writes an English diary to improve her language skills. Analyze her diary entry and respond with ONLY a valid JSON object (no markdown, no explanation): { "corrected": "full corrected diary text here", "corrections": [{"original": "wrong phrase", "corrected": "correct phrase", "explanation": "Japanese explanation"}], "patterns": [{"pattern": "grammar pattern name", "explanation": "Japanese explanation", "example": "example sentence"}], "newPhrases": [{"english": "useful phrase", "japanese": "Japanese meaning", "context": "when to use", "level": "初級"}], "weakPoints": ["weakness description in Japanese"] } Rules: - ALL FIVE top-level keys (corrected, corrections, patterns, newPhrases, weakPoints) MUST always be present in your response, even if some of them are empty arrays [] - corrections: list actual errors found (empty array [] if no errors) - patterns: even if the diary is short or has no errors, ALWAYS identify 1-3 useful grammar patterns or sentence structures she used well or could use, with a Japanese explanation and example - newPhrases: even if the diary is short, ALWAYS suggest 2-5 useful phrases related to the diary's topic or her work (pharmaceutical regulatory affairs) that she could use in similar future entries, level must be one of: 初級, 中級, 上級 - weakPoints: even if grammatically correct, ALWAYS give 1-3 constructive suggestions for improvement (e.g. add more detail, use more advanced vocabulary, vary sentence structure) - Her known weak areas: ${weakList || "none yet"} - IMPORTANT: escape all double quotes and newlines properly inside JSON string values so the JSON remains valid. Do not truncate or cut off your response; always output the complete JSON object with the closing brace.`;
+      const sys = `You are an English teacher for Eriko, a Japanese pharmaceutical regulatory affairs professional. She writes an English diary to improve her language skills. Analyze her diary entry and respond with ONLY a valid JSON object (no markdown, no explanation): { "corrected": "full corrected diary text here", "corrections": [{"original": "wrong phrase", "corrected": "correct phrase", "explanation": "Japanese explanation"}], "patterns": [{"pattern": "grammar pattern name", "explanation": "Japanese explanation", "example": "example sentence"}], "newPhrases": [{"english": "useful phrase", "japanese": "Japanese meaning", "context": "when to use", "level": "初級"}], "weakPoints": ["weakness description in Japanese"] } Rules: - ALL FIVE top-level keys (corrected, corrections, patterns, newPhrases, weakPoints) MUST always be present in your response, even if some of them are empty arrays [] - corrections: list actual errors found (empty array [] if no errors) - patterns: even if the diary is short or has no errors, ALWAYS identify 1-3 useful grammar patterns or sentence structures she used well or could use, with a Japanese explanation and example - newPhrases: even if the diary is short, ALWAYS suggest 2-5 useful phrases related to the diary's topic or her work (pharmaceutical regulatory affairs) that she could use in similar future entries, level must be one of: 初級, 中級, 上級 - weakPoints: even if grammatically correct, ALWAYS give 1-3 constructive suggestions for improvement (e.g. add more detail, use more advanced vocabulary, vary sentence structure) - Her known weak areas: ${weakList || "none yet"} - CRITICAL JSON FORMATTING: if the diary text itself contains quoted words or nicknames (e.g. she wrote something like "Oyakata"), do NOT reproduce the quote marks inside your JSON string values. Instead, rewrite it without quote marks (e.g. the nickname Oyakata) or escape every double quote as \\" with a backslash. Never output a bare unescaped " character inside any JSON string value. Do not truncate or cut off your response; always output the complete JSON object with the closing brace.`;
       const result = await callClaudeJSON(sys, draft, { requiredKeys: ["corrected", "corrections", "patterns", "newPhrases", "weakPoints"] });
       result.corrections = result.corrections || []; result.patterns = result.patterns || []; result.newPhrases = result.newPhrases || []; result.weakPoints = result.weakPoints || []; result.corrected = result.corrected || draft;
       const entry = { id:uid(), date:today(), original:draft, ...result };
