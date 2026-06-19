@@ -183,17 +183,30 @@ function tryParseJSON(raw) {
 }
 
 // callClaude + JSON抽出 + 失敗時は明確なエラーを伝えて1回だけ自動リトライする
-async function callClaudeJSON(systemPrompt, userMessage, { retry = true } = {}) {
+// 必須キーが存在するかチェックする（truncatedなJSONがcorrectedだけで
+// 正常終了してしまい、他のフィールドが「空配列」で静かに補完される事故を防ぐ）
+function hasRequiredKeys(obj, requiredKeys) {
+  if (!requiredKeys || requiredKeys.length === 0) return true;
+  if (!obj || typeof obj !== "object") return false;
+  return requiredKeys.every(k => Object.prototype.hasOwnProperty.call(obj, k));
+}
+
+async function callClaudeJSON(systemPrompt, userMessage, { retry = true, requiredKeys = null } = {}) {
   const resp = await callClaude(systemPrompt, userMessage);
   let result = tryParseJSON(resp);
-  if (result) return result;
+  if (result && hasRequiredKeys(result, requiredKeys)) return result;
 
   if (retry) {
-    // AIにJSON限定で再依頼（フォーマット崩れの修復を狙う）
+    // AIにJSON限定で再依頼（フォーマット崩れ・途中で切れたレスポンスの修復を狙う）
     try {
-      const fixSys = `${systemPrompt}\n\nCRITICAL: Your previous response could not be parsed as JSON. Return ONLY the raw JSON object/array, with no markdown code fences, no commentary, and no trailing commas.`;
+      const missingNote = result && requiredKeys
+        ? ` Your previous response was valid JSON but was missing required fields: ${requiredKeys.filter(k => !Object.prototype.hasOwnProperty.call(result, k)).join(", ")}. Make sure ALL required fields are present, even if some are empty arrays.`
+        : "";
+      const fixSys = `${systemPrompt}\n\nCRITICAL: Your previous response could not be parsed as JSON, or was incomplete.${missingNote} Return ONLY the complete, raw JSON object/array with ALL required fields, with no markdown code fences, no commentary, and no trailing commas. Do not truncate your response.`;
       const resp2 = await callClaude(fixSys, userMessage);
       result = tryParseJSON(resp2);
+      if (result && hasRequiredKeys(result, requiredKeys)) return result;
+      // 2回目もダメだが何らかのJSONが取れていれば、欠けてはいるが返す（呼び出し側でフォールバック処理する）
       if (result) return result;
     } catch {}
   }
@@ -1254,8 +1267,8 @@ function DiaryTab({ setPhrases, weaknesses }) {
     setLoading(true); setError(""); setLoadingMsg("AIが添削中… (10〜20秒)");
     try {
       const weakList = weaknesses.map(w => w.english).join(", ");
-      const sys = `You are an English teacher for Eriko, a Japanese pharmaceutical regulatory affairs professional. She writes an English diary to improve her language skills. Analyze her diary entry and respond with ONLY a valid JSON object (no markdown, no explanation): { "corrected": "full corrected diary text here", "corrections": [{"original": "wrong phrase", "corrected": "correct phrase", "explanation": "Japanese explanation"}], "patterns": [{"pattern": "grammar pattern name", "explanation": "Japanese explanation", "example": "example sentence"}], "newPhrases": [{"english": "useful phrase", "japanese": "Japanese meaning", "context": "when to use", "level": "初級"}], "weakPoints": ["weakness description in Japanese"] } Rules: - corrections: list actual errors found (empty array [] if no errors) - patterns: 2-3 key grammar patterns to remember - newPhrases: 3-5 useful phrases, level must be one of: 初級, 中級, 上級 - weakPoints: 1-3 specific weaknesses observed - Her known weak areas: ${weakList || "none yet"} - IMPORTANT: escape all double quotes and newlines properly inside JSON string values so the JSON remains valid.`;
-      const result = await callClaudeJSON(sys, draft);
+      const sys = `You are an English teacher for Eriko, a Japanese pharmaceutical regulatory affairs professional. She writes an English diary to improve her language skills. Analyze her diary entry and respond with ONLY a valid JSON object (no markdown, no explanation): { "corrected": "full corrected diary text here", "corrections": [{"original": "wrong phrase", "corrected": "correct phrase", "explanation": "Japanese explanation"}], "patterns": [{"pattern": "grammar pattern name", "explanation": "Japanese explanation", "example": "example sentence"}], "newPhrases": [{"english": "useful phrase", "japanese": "Japanese meaning", "context": "when to use", "level": "初級"}], "weakPoints": ["weakness description in Japanese"] } Rules: - ALL FIVE top-level keys (corrected, corrections, patterns, newPhrases, weakPoints) MUST always be present in your response, even if some of them are empty arrays [] - corrections: list actual errors found (empty array [] if no errors) - patterns: even if the diary is short or has no errors, ALWAYS identify 1-3 useful grammar patterns or sentence structures she used well or could use, with a Japanese explanation and example - newPhrases: even if the diary is short, ALWAYS suggest 2-5 useful phrases related to the diary's topic or her work (pharmaceutical regulatory affairs) that she could use in similar future entries, level must be one of: 初級, 中級, 上級 - weakPoints: even if grammatically correct, ALWAYS give 1-3 constructive suggestions for improvement (e.g. add more detail, use more advanced vocabulary, vary sentence structure) - Her known weak areas: ${weakList || "none yet"} - IMPORTANT: escape all double quotes and newlines properly inside JSON string values so the JSON remains valid. Do not truncate or cut off your response; always output the complete JSON object with the closing brace.`;
+      const result = await callClaudeJSON(sys, draft, { requiredKeys: ["corrected", "corrections", "patterns", "newPhrases", "weakPoints"] });
       result.corrections = result.corrections || []; result.patterns = result.patterns || []; result.newPhrases = result.newPhrases || []; result.weakPoints = result.weakPoints || []; result.corrected = result.corrected || draft;
       const entry = { id:uid(), date:today(), original:draft, ...result };
       setEntries(prev => { const updated = [entry, ...prev]; save(STORAGE.diary, updated); return updated; });
