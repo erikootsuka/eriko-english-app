@@ -1242,6 +1242,7 @@ function PracticeTab({ phrases }) {
   const [dictResult, setDictResult] = useState(null);
   const [checking, setChecking] = useState(false);
   const [speechRate, setSpeechRate] = useState(0.9); // 0.7=ゆっくり / 0.9=普通 / 1.1=速い
+  const [dictLevel, setDictLevel] = useState("すべて"); // ディクテーション専用のレベル絞り込み
   const recognitionRef = useRef(null);
   const recordingTimeoutRef = useRef(null);
   const silenceTimeoutRef = useRef(null);
@@ -1253,6 +1254,7 @@ function PracticeTab({ phrases }) {
   ];
 
   const filtered = cat === "すべて" ? phrases : phrases.filter(p => p.category === cat);
+  const dictFiltered = dictLevel === "すべて" ? filtered : filtered.filter(p => p.level === dictLevel);
 
   // アンマウント時に音声認識・タイマーを確実に破棄（画面遷移でフリーズしないように）
   useEffect(() => {
@@ -1265,9 +1267,9 @@ function PracticeTab({ phrases }) {
     };
   }, []);
 
-  function pickRandom() {
-    if (filtered.length === 0) return null;
-    return filtered[Math.floor(Math.random() * filtered.length)];
+  function pickRandom(pool = filtered) {
+    if (pool.length === 0) return null;
+    return pool[Math.floor(Math.random() * pool.length)];
   }
 
   function startShadowing() {
@@ -1282,7 +1284,7 @@ function PracticeTab({ phrases }) {
   }
 
   function startDictation() {
-    const p = pickRandom();
+    const p = pickRandom(dictFiltered);
     if (!p) return;
     setCurrentPhrase(p);
     setDictSubMode("listen");
@@ -1517,6 +1519,11 @@ function PracticeTab({ phrases }) {
 
         {subMode === "result" && score && (
           <div style={{ flex:1, display:"flex", flexDirection:"column", gap:14 }}>
+            <div style={{ background:C.card, borderRadius:12, padding:14, border:`1px solid ${C.border}` }}>
+              <div style={{ fontSize:10, fontWeight:700, color:C.muted, marginBottom:6 }}>📖 練習したフレーズ</div>
+              <div style={{ fontSize:14, fontWeight:700, color:C.slate, lineHeight:1.6 }}>{currentPhrase.english}</div>
+              {currentPhrase.japanese && <div style={{ fontSize:13, color:C.muted, marginTop:6 }}>{currentPhrase.japanese}</div>}
+            </div>
             <div style={{ background:`linear-gradient(135deg,${C.primary},${C.accent})`, borderRadius:14, padding:20, textAlign:"center", color:"#fff" }}>
               <div style={{ fontSize:48, fontWeight:800 }}>{score.score}<span style={{ fontSize:18 }}>点</span></div>
               <div style={{ fontSize:13, marginTop:6, opacity:0.9 }}>{score.feedback}</div>
@@ -1622,7 +1629,7 @@ function PracticeTab({ phrases }) {
       </div>
 
       <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
-        <div style={{ background:C.card, border:`2px solid ${C.primary}`, borderRadius:16, padding:20, cursor: filtered.length > 0 ? "pointer" : "not-allowed", opacity: filtered.length > 0 ? 1 : 0.5 }} onClick={filtered.length > 0 ? startShadowing : undefined}>
+        <div style={{ background:C.card, border:`2px solid ${C.primary}`, borderRadius:16, padding:20 }}>
           <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:8 }}>
             <div style={{ width:48, height:48, borderRadius:12, background:`linear-gradient(135deg,${C.primary},${C.accent})`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:24 }}>🎤</div>
             <div>
@@ -1630,13 +1637,14 @@ function PracticeTab({ phrases }) {
               <div style={{ fontSize:11, color:C.primary, fontWeight:600 }}>話す力を鍛える</div>
             </div>
           </div>
-          <div style={{ fontSize:12, color:C.muted, lineHeight:1.6 }}>音声を聞いてから真似して発音。録音して採点まで。スクリプトのハイライト表示付き。</div>
-          <div style={{ display:"flex", gap:6, marginTop:10 }}>
+          <div style={{ fontSize:12, color:C.muted, lineHeight:1.6, marginBottom:10 }}>音声を聞いてから真似して発音。録音して採点まで。スクリプトのハイライト表示付き。</div>
+          <div style={{ display:"flex", gap:6, marginBottom:12 }}>
             {["1. 聞く","2. 読む","3. 録音","4. 採点"].map(s => (<span key={s} style={{ fontSize:10, padding:"2px 8px", borderRadius:99, background:C.primaryLight, color:C.primary, fontWeight:600 }}>{s}</span>))}
           </div>
+          <button onClick={startShadowing} disabled={filtered.length === 0} style={{ width:"100%", padding:12, borderRadius:10, border:"none", background: filtered.length > 0 ? C.primary : C.subtle, color:"#fff", fontSize:14, fontWeight:700, cursor: filtered.length > 0 ? "pointer" : "not-allowed" }}>🎤 シャドーイングを始める</button>
         </div>
 
-        <div style={{ background:C.card, border:`2px solid ${C.success}`, borderRadius:16, padding:20, cursor: filtered.length > 0 ? "pointer" : "not-allowed", opacity: filtered.length > 0 ? 1 : 0.5 }} onClick={filtered.length > 0 ? startDictation : undefined}>
+        <div style={{ background:C.card, border:`2px solid ${C.success}`, borderRadius:16, padding:20 }}>
           <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:8 }}>
             <div style={{ width:48, height:48, borderRadius:12, background:`linear-gradient(135deg,${C.success},#22c55e)`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:24 }}>📝</div>
             <div>
@@ -1644,10 +1652,18 @@ function PracticeTab({ phrases }) {
               <div style={{ fontSize:11, color:C.success, fontWeight:600 }}>聞く力を鍛える</div>
             </div>
           </div>
-          <div style={{ fontSize:12, color:C.muted, lineHeight:1.6 }}>音声を聞いて英文を書き取る練習。何度でも再生OK。採点＆正解表示あり。</div>
-          <div style={{ display:"flex", gap:6, marginTop:10 }}>
+          <div style={{ fontSize:12, color:C.muted, lineHeight:1.6, marginBottom:10 }}>音声を聞いて英文を書き取る練習。何度でも再生OK。採点＆正解表示あり。</div>
+          <div style={{ display:"flex", gap:6, marginBottom:10 }}>
             {["1. 聞く","2. 書く","3. 答え合わせ"].map(s => (<span key={s} style={{ fontSize:10, padding:"2px 8px", borderRadius:99, background:C.successLight, color:C.success, fontWeight:600 }}>{s}</span>))}
           </div>
+          <div style={{ fontSize:10, fontWeight:700, color:C.mid, marginBottom:6 }}>レベルを選ぶ</div>
+          <div style={{ display:"flex", gap:6, marginBottom:12 }}>
+            {["すべて", ...LEVELS].map(l => (
+              <button key={l} onClick={() => setDictLevel(l)} style={{ flex:1, padding:"6px 0", borderRadius:8, border:"none", cursor:"pointer", fontSize:11, fontWeight:700, background: dictLevel===l ? (l==="すべて"?C.slate:levelColor(l)) : C.surface, color: dictLevel===l ? "#fff" : (l==="すべて"?C.muted:levelColor(l)) }}>{l}</button>
+            ))}
+          </div>
+          <div style={{ fontSize:11, color:C.subtle, marginBottom:10 }}>{dictFiltered.length}件の表現から出題</div>
+          <button onClick={startDictation} disabled={dictFiltered.length === 0} style={{ width:"100%", padding:12, borderRadius:10, border:"none", background: dictFiltered.length > 0 ? C.success : C.subtle, color:"#fff", fontSize:14, fontWeight:700, cursor: dictFiltered.length > 0 ? "pointer" : "not-allowed" }}>📝 ディクテーションを始める</button>
         </div>
       </div>
 
