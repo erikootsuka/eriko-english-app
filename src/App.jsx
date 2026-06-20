@@ -395,14 +395,30 @@ function HomeTab({ phrases, vocab, progress, goals, onNavigate, earnedBadges = [
     setPowLoading(true);
     try {
       const weekKey = getWeekKey();
-      const sample = phrases.slice(0, 30).map(p => ({ english: p.english, japanese: p.japanese, level: p.level }));
-      const sys = `You are an English learning coach for Eriko, a Japanese pharmaceutical regulatory affairs professional. From the provided phrase list, select ONE phrase that would be most useful and interesting to focus on this week. Consider variety - don't pick the same type every time. Return ONLY valid JSON: {"english":"the phrase","japanese":"日本語訳","level":"初級|中級|上級","reason":"なぜこのフレーズを選んだか（日本語で1文）","usageTip":"このフレーズを使うシチュエーションのコツ（日本語で1文）"}`;
+      // 候補は毎回シャッフルしてから抽出する（毎回同じ並び・同じ30件をAIに渡すと、
+      // AIが毎回同じ判断をしてしまい同じフレーズばかり選ばれる事故が起きるため）
+      const shuffled = [...phrases].sort(() => Math.random() - 0.5);
+      const sample = shuffled.slice(0, 30).map(p => ({ english: p.english, japanese: p.japanese, level: p.level }));
+
+      // 直近に選んだフレーズの履歴（最大5件）を取得し、AIに「これらは避けて」と伝える
+      const recentHistory = load("eriko_phrase_of_week_history", []);
+      const avoidList = recentHistory.slice(0, 5);
+      const avoidNote = avoidList.length > 0
+        ? `\n\nIMPORTANT: Do NOT select any of these recently used phrases (pick something different): ${avoidList.map(p => `"${p}"`).join(", ")}`
+        : "";
+
+      const sys = `You are an English learning coach for Eriko, a Japanese pharmaceutical regulatory affairs professional. From the provided phrase list, select ONE phrase that would be most useful and interesting to focus on this week. Consider variety - don't pick the same type every time.${avoidNote} Return ONLY valid JSON: {"english":"the phrase","japanese":"日本語訳","level":"初級|中級|上級","reason":"なぜこのフレーズを選んだか（日本語で1文）","usageTip":"このフレーズを使うシチュエーションのコツ（日本語で1文）"}`;
       const resp = await callClaude(sys, JSON.stringify(sample));
       const m = resp.match(/\{[\s\S]*\}/);
       if (m) {
         const data = { ...JSON.parse(m[0]), weekKey };
         setPhraseOfWeek(data);
         save(STORAGE.phraseOfWeek, data);
+        // 履歴に今回選んだフレーズを追加（直近5件まで保持）
+        if (data.english) {
+          const updatedHistory = [data.english, ...avoidList].slice(0, 5);
+          save("eriko_phrase_of_week_history", updatedHistory);
+        }
       }
     } catch {}
     setPowLoading(false);
