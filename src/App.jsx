@@ -13,6 +13,7 @@ const STORAGE = {
   learningCalendar: "eriko_learning_calendar",
   pronunciationLog: "eriko_pronunciation_log",
   badges: "eriko_badges",
+  translationSources: "eriko_translation_sources",
 };
 
 const LEVELS = ["初級", "中級", "上級"];
@@ -31,7 +32,7 @@ const VOCAB_CATS = ["すべて", "一般", "医薬品", "規制", "ビジネス"
 const PARTS = ["名詞", "動詞", "形容詞", "副詞", "イディオム", "フレーズ"];
 
 // ===================== VERSION =====================
-const BUILD_VERSION = "2026-06-20-p6";
+const BUILD_VERSION = "2026-06-20-p7";
 
 // ===================== WEEK KEY =====================
 function getWeekKey() {
@@ -339,6 +340,22 @@ function buildDiaryQuizPool(diaryEntries) {
     });
   });
   return pool;
+}
+
+// ===================== SENTENCE SPLITTER (英作文・英訳練習用) =====================
+// 長文（CTD抜粋や添付文書など）を文単位に分割する。英語はピリオド・疑問符・感嘆符、
+// 日本語は句点（。）を区切りとする簡易ロジック。略語（e.g., etc.など）での誤分割は
+// 完全には防げないが、練習用の分割としては実用上十分な精度とする。
+function splitIntoSentences(text, isJapanese) {
+  if (!text || !text.trim()) return [];
+  const normalized = text.trim().replace(/\s+/g, " ");
+  let parts;
+  if (isJapanese) {
+    parts = normalized.split(/(?<=。)/);
+  } else {
+    parts = normalized.split(/(?<=[.!?])\s+/);
+  }
+  return parts.map(s => s.trim()).filter(s => s.length > 0);
 }
 
 // ===================== COMPONENTS =====================
@@ -1667,7 +1684,7 @@ function DiaryTab({ setPhrases, weaknesses }) {
 
 // ===================== PRACTICE TAB (旧コードから復元) =====================
 function PracticeTab({ phrases }) {
-  const [mode, setMode] = useState("select"); // select | shadowing | dictation
+  const [mode, setMode] = useState("select"); // select | shadowing | dictation | translation
   const [subMode, setSubMode] = useState("listen"); // shadowing: listen | read | record | result
   const [dictSubMode, setDictSubMode] = useState("listen"); // dictation: listen | input | result
   const [cat, setCat] = useState("すべて");
@@ -1686,6 +1703,85 @@ function PracticeTab({ phrases }) {
   const recordingTimeoutRef = useRef(null);
   const silenceTimeoutRef = useRef(null);
   const stopRecordingRef = useRef(null);
+
+  // ---- 英作文・英訳練習 ----
+  const [transSubMode, setTransSubMode] = useState("select"); // select(原文選択) | practice(練習中) | result
+  const [savedSources, setSavedSources] = useState(() => load(STORAGE.translationSources, []));
+  const [pasteText, setPasteText] = useState("");
+  const [pasteTitle, setPasteTitle] = useState("");
+  const [savePaste, setSavePaste] = useState(false);
+  const [transDirection, setTransDirection] = useState("ja2en"); // ja2en | en2ja
+  const [transUnit, setTransUnit] = useState("whole"); // whole(全文) | sentence(文ごと)
+  const [transSentences, setTransSentences] = useState([]); // 出題対象の文（または全文1件）の配列
+  const [transIdx, setTransIdx] = useState(0);
+  const [transInput, setTransInput] = useState("");
+  const [transResult, setTransResult] = useState(null);
+  const [transChecking, setTransChecking] = useState(false);
+  const [showSourceManage, setShowSourceManage] = useState(false);
+  const [deletingSourceId, setDeletingSourceId] = useState(null);
+
+  useEffect(() => { save(STORAGE.translationSources, savedSources); }, [savedSources]);
+
+  // 表現集の中から、原文として使うのにふさわしい「長め」の項目を抽出する（30文字以上を目安とする）
+  const longPhraseSources = phrases.filter(p => (p.english && p.english.length >= 30) || (p.japanese && p.japanese.length >= 30));
+
+  function startTranslationPractice(sourceText, isJapaneseSource) {
+    const direction = isJapaneseSource ? "ja2en" : "en2ja";
+    setTransDirection(direction);
+    const sentences = transUnit === "sentence" ? splitIntoSentences(sourceText, isJapaneseSource) : [sourceText.trim()];
+    if (sentences.length === 0) return;
+    setTransSentences(sentences);
+    setTransIdx(0);
+    setTransInput("");
+    setTransResult(null);
+    setTransSubMode("practice");
+  }
+
+  function addSavedSource() {
+    if (!pasteText.trim()) return;
+    const entry = { id: uid(), title: pasteTitle.trim() || pasteText.trim().slice(0, 24) + (pasteText.trim().length > 24 ? "…" : ""), text: pasteText.trim(), addedDate: today() };
+    setSavedSources(prev => [entry, ...prev]);
+    return entry;
+  }
+
+  function deleteSavedSource(id) {
+    setSavedSources(prev => prev.filter(s => s.id !== id));
+    setDeletingSourceId(null);
+  }
+
+  async function checkTranslation() {
+    if (!transInput.trim()) return;
+    setTransChecking(true);
+    const original = transSentences[transIdx];
+    try {
+      const directionLabel = transDirection === "ja2en" ? "Japanese to English" : "English to Japanese";
+      const sys = `You are an English teacher for Eriko, a Japanese pharmaceutical regulatory affairs professional. She is practicing ${directionLabel} translation, often using pharmaceutical/regulatory source texts (package inserts, CTD excerpts, etc.). Review her translation attempt the same way you would review a diary entry: be thorough and constructive. Return ONLY valid JSON: {"corrected": "a fully corrected/natural version of her translation", "corrections": [{"original": "her phrase with an issue", "corrected": "the better phrase", "explanation": "Japanese explanation of why"}], "naturalAlternatives": [{"phrase": "a more natural way to express part of this", "explanation": "Japanese explanation"}], "overallComment": "1-2 sentence overall comment in Japanese, encouraging but honest"} Rules: - corrections: list actual errors/awkward phrasing found (empty array [] if truly none) - naturalAlternatives: even if there are no errors, suggest 1-3 more natural/polished alternative phrasings where applicable (empty array [] only if her translation is already excellent and idiomatic throughout) - Keep technical/regulatory terminology accurate; this is professional translation practice, not casual writing.`;
+      const userMsg = `Source text (${transDirection === "ja2en" ? "Japanese" : "English"}): "${original}"\n\nEriko's translation attempt: "${transInput}"`;
+      const result = await callClaudeJSON(sys, userMsg, { requiredKeys: ["corrected", "corrections", "naturalAlternatives", "overallComment"] });
+      result.corrections = result.corrections || [];
+      result.naturalAlternatives = result.naturalAlternatives || [];
+      result.corrected = result.corrected || transInput;
+      result.overallComment = result.overallComment || "";
+      setTransResult(result);
+    } catch (e) {
+      setTransResult({ corrected: transInput, corrections: [], naturalAlternatives: [], overallComment: "添削に失敗しました。もう一度お試しください。", error: true });
+    }
+    setTransChecking(false);
+  }
+
+  function nextTransSentence() {
+    if (transIdx + 1 >= transSentences.length) {
+      setTransSubMode("select");
+      setTransSentences([]);
+      setTransIdx(0);
+      setTransInput("");
+      setTransResult(null);
+    } else {
+      setTransIdx(i => i + 1);
+      setTransInput("");
+      setTransResult(null);
+    }
+  }
 
   const SPEED_OPTIONS = [
     { rate: 0.6, label: "🐢 ゆっくり" },
@@ -2084,6 +2180,182 @@ function PracticeTab({ phrases }) {
     );
   }
 
+  // ---- TRANSLATION (英作文・英訳) ----
+  if (mode === "translation") {
+    const inp2 = { width:"100%", padding:"10px 12px", borderRadius:10, border:`1px solid ${C.border}`, fontSize:14, boxSizing:"border-box", outline:"none", fontFamily:"inherit" };
+
+    // ---- 原文選択画面 ----
+    if (transSubMode === "select") return (
+      <div style={{ padding:"16px", display:"flex", flexDirection:"column", height:"100%", overflowY:"auto" }}>
+        <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14 }}>
+          <button onClick={() => setMode("select")} style={{ background:"none", border:"none", cursor:"pointer", fontSize:20, color:C.muted }}>←</button>
+          <h3 style={{ margin:0, fontSize:16, fontWeight:800 }}>✍️ 英作文・英訳</h3>
+        </div>
+
+        {/* 出題単位の選択 */}
+        <div style={{ background:C.card, borderRadius:12, padding:12, border:`1px solid ${C.border}`, marginBottom:14 }}>
+          <div style={{ fontSize:11, fontWeight:700, color:C.mid, marginBottom:8 }}>出題単位</div>
+          <div style={{ display:"flex", gap:8 }}>
+            {[["whole","文章全体のまま"],["sentence","1文ずつ分割"]].map(([v,l]) => (
+              <button key={v} onClick={() => setTransUnit(v)} style={{ flex:1, padding:"8px 0", borderRadius:8, border:`2px solid ${transUnit===v?C.purple:C.border}`, background:transUnit===v?C.purpleLight:C.card, cursor:"pointer", fontSize:12, fontWeight:transUnit===v?700:400, color:transUnit===v?C.purple:C.muted }}>{l}</button>
+            ))}
+          </div>
+          <div style={{ fontSize:10, color:C.subtle, marginTop:6 }}>長い文章は「1文ずつ分割」がおすすめです</div>
+        </div>
+
+        {/* その場で貼り付け */}
+        <div style={{ background:C.card, borderRadius:12, padding:14, border:`1px solid ${C.border}`, marginBottom:14 }}>
+          <div style={{ fontSize:13, fontWeight:800, color:C.slate, marginBottom:8 }}>📋 原文を貼り付けて練習</div>
+          <textarea value={pasteText} onChange={e => setPasteText(e.target.value)} placeholder="添付文書やCTD抜粋などの原文を貼り付け…（日本語・英語どちらでもOK）" style={{ ...inp2, height:100, resize:"none" }} />
+          <div style={{ display:"flex", alignItems:"center", gap:8, marginTop:8 }}>
+            <input value={pasteTitle} onChange={e => setPasteTitle(e.target.value)} placeholder="タイトル（任意・保存する場合）" style={{ ...inp2, flex:1 }} />
+            <label style={{ display:"flex", alignItems:"center", gap:5, fontSize:11, color:C.muted, whiteSpace:"nowrap" }}>
+              <input type="checkbox" checked={savePaste} onChange={e => setSavePaste(e.target.checked)} />
+              原文集に保存
+            </label>
+          </div>
+          <button
+            onClick={() => {
+              if (!pasteText.trim()) return;
+              const isJapaneseSource = /[\u3000-\u9fff\uff00-\uffef]/.test(pasteText);
+              if (savePaste) addSavedSource();
+              startTranslationPractice(pasteText, isJapaneseSource);
+              setPasteText(""); setPasteTitle(""); setSavePaste(false);
+            }}
+            disabled={!pasteText.trim()}
+            style={{ width:"100%", padding:12, borderRadius:10, border:"none", marginTop:10, background: pasteText.trim() ? C.purple : C.subtle, color:"#fff", fontSize:14, fontWeight:700, cursor: pasteText.trim() ? "pointer" : "not-allowed" }}
+          >この原文で練習する</button>
+        </div>
+
+        {/* 保存済み原文集から選ぶ */}
+        <div style={{ background:C.card, borderRadius:12, padding:14, border:`1px solid ${C.border}`, marginBottom:14 }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+            <div style={{ fontSize:13, fontWeight:800, color:C.slate }}>📚 保存済みの原文から選ぶ</div>
+            {savedSources.length > 0 && (<button onClick={() => setShowSourceManage(v => !v)} style={{ background:"none", border:"none", color:C.purple, fontSize:11, cursor:"pointer" }}>{showSourceManage ? "完了" : "管理"}</button>)}
+          </div>
+          {savedSources.length === 0 ? (
+            <div style={{ fontSize:12, color:C.subtle, textAlign:"center", padding:"12px 0" }}>まだ保存された原文がありません</div>
+          ) : savedSources.map(s => (
+            <div key={s.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 0", borderBottom:`1px solid ${C.surface}` }}>
+              <div onClick={() => { if (!showSourceManage) startTranslationPractice(s.text, /[\u3000-\u9fff\uff00-\uffef]/.test(s.text)); }} style={{ flex:1, minWidth:0, cursor: showSourceManage ? "default" : "pointer" }}>
+                <div style={{ fontSize:13, fontWeight:700, color:C.slate, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{s.title}</div>
+                <div style={{ fontSize:10, color:C.subtle }}>{s.text.length}文字 • {s.addedDate}</div>
+              </div>
+              {showSourceManage ? (
+                deletingSourceId === s.id ? (
+                  <div style={{ display:"flex", gap:6 }}>
+                    <button onClick={() => deleteSavedSource(s.id)} style={{ background:C.danger, border:"none", borderRadius:6, padding:"4px 8px", color:"#fff", fontSize:10, cursor:"pointer" }}>削除</button>
+                    <button onClick={() => setDeletingSourceId(null)} style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:6, padding:"4px 8px", color:C.muted, fontSize:10, cursor:"pointer" }}>戻る</button>
+                  </div>
+                ) : (
+                  <button onClick={() => setDeletingSourceId(s.id)} style={{ background:"none", border:`1px solid ${C.dangerMid}`, color:C.danger, borderRadius:6, padding:"4px 8px", fontSize:10, cursor:"pointer", flexShrink:0 }}>削除</button>
+                )
+              ) : (
+                <div style={{ fontSize:16, color:C.border, flexShrink:0 }}>▶</div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {/* 表現集の長文を元ネタとして使う */}
+        <div style={{ background:C.card, borderRadius:12, padding:14, border:`1px solid ${C.border}` }}>
+          <div style={{ fontSize:13, fontWeight:800, color:C.slate, marginBottom:4 }}>📚 表現集の長文を使う</div>
+          <div style={{ fontSize:10, color:C.subtle, marginBottom:8 }}>30文字以上の表現集の項目を原文として使えます（コピー不要・そのまま参照）</div>
+          {longPhraseSources.length === 0 ? (
+            <div style={{ fontSize:12, color:C.subtle, textAlign:"center", padding:"12px 0" }}>30文字以上の表現がまだありません</div>
+          ) : longPhraseSources.map(p => {
+            const useEnglish = p.english.length >= (p.japanese?.length || 0);
+            const displayText = useEnglish ? p.english : p.japanese;
+            return (
+              <div key={p.id} onClick={() => startTranslationPractice(displayText, !useEnglish)} style={{ padding:"8px 0", borderBottom:`1px solid ${C.surface}`, cursor:"pointer", display:"flex", alignItems:"center", gap:8 }}>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:12, color:C.slate, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{displayText}</div>
+                  <div style={{ display:"flex", gap:5, marginTop:3 }}>
+                    <span style={{ fontSize:9, padding:"1px 6px", borderRadius:99, background:levelBg(p.level), color:levelColor(p.level), fontWeight:700 }}>{p.level}</span>
+                    <span style={{ fontSize:9, padding:"1px 6px", borderRadius:99, background:C.primaryLight, color:C.primary, fontWeight:600 }}>{p.category}</span>
+                    <span style={{ fontSize:9, color:C.subtle }}>{displayText.length}文字</span>
+                  </div>
+                </div>
+                <div style={{ fontSize:16, color:C.border, flexShrink:0 }}>▶</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+
+    // ---- 練習中画面 ----
+    if (transSubMode === "practice") {
+      const original = transSentences[transIdx];
+      const directionLabel = transDirection === "ja2en" ? "日本語 → 英語" : "英語 → 日本語";
+      return (
+        <div style={{ padding:"16px", display:"flex", flexDirection:"column", height:"100%", overflowY:"auto" }}>
+          <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14 }}>
+            <button onClick={() => { setTransSubMode("select"); setTransSentences([]); setTransResult(null); }} style={{ background:"none", border:"none", cursor:"pointer", fontSize:20, color:C.muted }}>←</button>
+            <h3 style={{ margin:0, fontSize:16, fontWeight:800 }}>✍️ 英作文・英訳</h3>
+            <span style={{ marginLeft:"auto", fontSize:10, padding:"2px 8px", borderRadius:99, background:C.purpleLight, color:C.purple, fontWeight:700 }}>{directionLabel}</span>
+          </div>
+
+          {transSentences.length > 1 && (
+            <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:10 }}>
+              <span style={{ fontSize:11, color:C.muted }}>{transIdx+1}/{transSentences.length}文</span>
+              <div style={{ flex:1, height:5, background:C.border, borderRadius:99, overflow:"hidden" }}><div style={{ width:(((transIdx+1)/transSentences.length)*100)+"%", height:"100%", background:C.purple, transition:"width 0.3s" }} /></div>
+            </div>
+          )}
+
+          <div style={{ background:C.surface, borderRadius:12, padding:16, border:`1px solid ${C.border}`, marginBottom:12 }}>
+            <div style={{ fontSize:10, color:C.subtle, marginBottom:6 }}>原文（{transDirection === "ja2en" ? "日本語" : "英語"}）</div>
+            <div style={{ fontSize:14, color:C.slate, lineHeight:1.7 }}>{original}</div>
+          </div>
+
+          <div style={{ fontSize:11, color:C.muted, marginBottom:6 }}>{transDirection === "ja2en" ? "英訳を書いてください" : "和訳を書いてください"}</div>
+          <textarea value={transInput} onChange={e => setTransInput(e.target.value)} placeholder={transDirection === "ja2en" ? "Your English translation..." : "あなたの日本語訳…"} style={{ ...inp2, height:120, resize:"none", marginBottom:12 }} disabled={!!transResult} />
+
+          {!transResult ? (
+            <button onClick={checkTranslation} disabled={!transInput.trim() || transChecking} style={{ padding:14, borderRadius:12, border:"none", background: transInput.trim() && !transChecking ? C.purple : C.subtle, color:"#fff", fontSize:15, fontWeight:700, cursor:"pointer" }}>{transChecking ? "AIが添削中…" : "✨ 添削してもらう"}</button>
+          ) : (
+            <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+              {transResult.error ? (
+                <div style={{ background:C.dangerLight, border:`1px solid ${C.dangerMid}`, borderRadius:10, padding:12, fontSize:12, color:C.danger }}>⚠️ {transResult.overallComment}</div>
+              ) : (
+                <>
+                  <Section title="✅ 添削後の訳" color={C.success}>
+                    <div style={{ fontSize:13, lineHeight:1.8, color:C.slate }}>{transResult.corrected}</div>
+                  </Section>
+                  {transResult.corrections?.length > 0 && (
+                    <Section title={`🔍 修正箇所 (${transResult.corrections.length}件)`} color={C.danger}>
+                      {transResult.corrections.map((c, i) => (
+                        <div key={i} style={{ marginBottom:10, paddingBottom:10, borderBottom: i < transResult.corrections.length-1 ? `1px solid ${C.surface}` : "none" }}>
+                          <div style={{ fontSize:12 }}><span style={{ color:C.danger }}>❌ {c.original}</span></div>
+                          <div style={{ fontSize:12 }}><span style={{ color:C.success }}>✅ {c.corrected}</span></div>
+                          <div style={{ fontSize:11, color:C.muted, marginTop:4 }}>💡 {c.explanation}</div>
+                        </div>
+                      ))}
+                    </Section>
+                  )}
+                  {transResult.naturalAlternatives?.length > 0 && (
+                    <Section title="💬 より自然な表現の提案" color={C.primary}>
+                      {transResult.naturalAlternatives.map((a, i) => (
+                        <div key={i} style={{ marginBottom:8 }}>
+                          <div style={{ fontSize:13, fontWeight:700, color:C.primary }}>{a.phrase}</div>
+                          <div style={{ fontSize:11, color:C.muted }}>{a.explanation}</div>
+                        </div>
+                      ))}
+                    </Section>
+                  )}
+                  {transResult.overallComment && (
+                    <div style={{ background:C.purpleLight, border:`1px solid #ddd6fe`, borderRadius:10, padding:12, fontSize:13, color:C.purple }}>🌟 {transResult.overallComment}</div>
+                  )}
+                </>
+              )}
+              <button onClick={nextTransSentence} style={{ padding:14, borderRadius:12, border:"none", background:C.primary, color:"#fff", fontSize:15, fontWeight:700, cursor:"pointer" }}>{transIdx + 1 >= transSentences.length ? "完了" : "次の文へ →"}</button>
+            </div>
+          )}
+        </div>
+      );
+    }
+  }
+
   // ---- SELECT ----
   return (
     <div style={{ padding:"20px 16px" }}>
@@ -2137,6 +2409,21 @@ function PracticeTab({ phrases }) {
           </div>
           <div style={{ fontSize:11, color:C.subtle, marginBottom:10 }}>{dictFiltered.length}件の表現から出題</div>
           <button onClick={startDictation} disabled={dictFiltered.length === 0} style={{ width:"100%", padding:12, borderRadius:10, border:"none", background: dictFiltered.length > 0 ? C.success : C.subtle, color:"#fff", fontSize:14, fontWeight:700, cursor: dictFiltered.length > 0 ? "pointer" : "not-allowed" }}>📝 ディクテーションを始める</button>
+        </div>
+
+        <div style={{ background:C.card, border:`2px solid ${C.purple}`, borderRadius:16, padding:20 }}>
+          <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:8 }}>
+            <div style={{ width:48, height:48, borderRadius:12, background:`linear-gradient(135deg,${C.purple},#a855f7)`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:24 }}>✍️</div>
+            <div>
+              <div style={{ fontSize:16, fontWeight:800, color:C.slate }}>英作文・英訳</div>
+              <div style={{ fontSize:11, color:C.purple, fontWeight:600 }}>長文を訳す力を鍛える</div>
+            </div>
+          </div>
+          <div style={{ fontSize:12, color:C.muted, lineHeight:1.6, marginBottom:10 }}>添付文書やCTD抜粋など、クイズには長すぎる文章を日→英・英→日で訳す練習。AIが日記添削と同じ手厚さで添削します。</div>
+          <div style={{ display:"flex", gap:6, marginBottom:12 }}>
+            {["1. 原文を選ぶ","2. 訳す","3. AI添削"].map(s => (<span key={s} style={{ fontSize:10, padding:"2px 8px", borderRadius:99, background:C.purpleLight, color:C.purple, fontWeight:600 }}>{s}</span>))}
+          </div>
+          <button onClick={() => { setMode("translation"); setTransSubMode("select"); }} style={{ width:"100%", padding:12, borderRadius:10, border:"none", background:C.purple, color:"#fff", fontSize:14, fontWeight:700, cursor:"pointer" }}>✍️ 英作文・英訳を始める</button>
         </div>
       </div>
 
