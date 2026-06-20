@@ -32,7 +32,7 @@ const VOCAB_CATS = ["すべて", "一般", "医薬品", "規制", "ビジネス"
 const PARTS = ["名詞", "動詞", "形容詞", "副詞", "イディオム", "フレーズ"];
 
 // ===================== VERSION =====================
-const BUILD_VERSION = "2026-06-20-p9";
+const BUILD_VERSION = "2026-06-20-p10";
 
 // ===================== WEEK KEY =====================
 function getWeekKey() {
@@ -1391,6 +1391,8 @@ function VocabTab({ vocab, setVocab, autoOpen }) {
                 {direction === "random" && (
                   <span style={{ fontSize:9, padding:"2px 8px", borderRadius:99, background:C.purpleLight, color:C.purple, fontWeight:700 }}>{isJa2en ? "🇯🇵→🇬🇧" : "🇬🇧→🇯🇵"}</span>
                 )}
+                {/* 発音確認用の音声再生ボタン（カードの表/裏に関わらず常に単語の発音を聞ける） */}
+                <button onClick={e => { e.stopPropagation(); speak(card.word); }} style={{ marginLeft:"auto", background:C.primaryLight, border:"none", borderRadius:99, width:30, height:30, display:"flex", alignItems:"center", justifyContent:"center", fontSize:14, cursor:"pointer" }} title="発音を聞く">🔊</button>
               </div>
               <div onClick={() => setFlipped(v => !v)} style={{ width:"100%", minHeight:200, background:flipped?C.slate:C.card, border:`2px solid ${C.border}`, borderRadius:20, padding:24, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", cursor:"pointer", transition:"all 0.3s", textAlign:"center" }}>
                 {!flipped ? (
@@ -1436,13 +1438,24 @@ function VocabTab({ vocab, setVocab, autoOpen }) {
           {filtered.map(v => (
             <div key={v.id} style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:12, marginBottom:8, padding:"11px 13px" }}>
               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
-                <div><div style={{ fontSize:14, fontWeight:700, color:C.slate }}>{v.word}</div><div style={{ fontSize:12, color:C.muted, marginTop:2 }}>{v.meaning}</div></div>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                    <div style={{ fontSize:14, fontWeight:700, color:C.slate }}>{v.word}</div>
+                    <button onClick={() => speak(v.word)} style={{ background:C.primaryLight, border:"none", borderRadius:99, width:22, height:22, display:"flex", alignItems:"center", justifyContent:"center", fontSize:11, cursor:"pointer", flexShrink:0 }} title="発音を聞く">🔊</button>
+                  </div>
+                  <div style={{ fontSize:12, color:C.muted, marginTop:2 }}>{v.meaning}</div>
+                </div>
                 <div style={{ display:"flex", gap:6, flexShrink:0 }}>
                   <button onClick={() => setEditingVocab(v)} style={{ background:C.primaryLight, border:`1px solid ${C.primaryMid}`, color:C.primary, borderRadius:6, padding:"2px 10px", fontSize:10, cursor:"pointer", fontWeight:600 }}>編集</button>
                   <button onClick={() => setVocab(prev => prev.filter(x => x.id !== v.id))} style={{ background:"none", border:`1px solid ${C.dangerMid}`, color:C.danger, borderRadius:6, padding:"2px 8px", fontSize:10, cursor:"pointer" }}>削除</button>
                 </div>
               </div>
-              {v.example && <div style={{ fontSize:11, color:C.subtle, marginTop:6, fontStyle:"italic" }}>{v.example}</div>}
+              {v.example && (
+                <div style={{ display:"flex", alignItems:"flex-start", gap:5, marginTop:6 }}>
+                  <div style={{ fontSize:11, color:C.subtle, fontStyle:"italic", flex:1 }}>{v.example}</div>
+                  <button onClick={() => speak(v.example)} style={{ background:C.surface, border:"none", borderRadius:99, width:20, height:20, display:"flex", alignItems:"center", justifyContent:"center", fontSize:10, cursor:"pointer", flexShrink:0 }} title="例文の発音を聞く">🔊</button>
+                </div>
+              )}
               <div style={{ display:"flex", gap:5, marginTop:6 }}>
                 <span style={{ fontSize:9, padding:"2px 6px", borderRadius:99, background:levelBg(v.level), color:levelColor(v.level), fontWeight:700 }}>{v.level}</span>
                 <span style={{ fontSize:9, padding:"2px 6px", borderRadius:99, background:C.purpleLight, color:C.purple, fontWeight:600 }}>{v.partOfSpeech}</span>
