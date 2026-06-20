@@ -44,7 +44,7 @@ function markBackupDone(progressCount = 0) {
 }
 
 // ===================== VERSION =====================
-const BUILD_VERSION = "2026-06-20-p11";
+const BUILD_VERSION = "2026-06-20-p12";
 
 // ===================== WEEK KEY =====================
 function getWeekKey() {
@@ -250,6 +250,107 @@ function speak(text, onEnd, rate = 0.9) {
 
 function stopSpeaking() {
   if (window.speechSynthesis) window.speechSynthesis.cancel();
+}
+
+// ---- シャドーイング用：単語ハイライトを音声と同期させて再生する ----
+// ブラウザがSpeechSynthesisUtteranceのonboundaryイベント（word境界）に対応していれば、
+// 実際にTTSエンジンが読んでいる位置に基づいてハイライトを動かす（Chromeは概ね対応）。
+// 対応していない場合（iOS Safari等で発火しない・不正確な場合がある）は、
+// 単語の文字数に応じた重み付けで一定時間ごとにハイライトを進めるフォールバックに切り替える。
+// 戻り値: { cancel } — 呼び出し側で画面遷移時などにタイマー・読み上げを停止するために使う。
+function speakWithWordHighlight(text, { rate = 0.9, onHighlight, onEnd } = {}) {
+  const words = text.split(" ");
+  let cancelled = false;
+  let fallbackTimers = [];
+  let usedBoundaryEvent = false;
+
+  function cleanup() {
+    fallbackTimers.forEach(t => clearTimeout(t));
+    fallbackTimers = [];
+  }
+
+  function cancel() {
+    cancelled = true;
+    cleanup();
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
+  }
+
+  if (!window.speechSynthesis) {
+    if (onEnd) onEnd();
+    return { cancel };
+  }
+
+  window.speechSynthesis.cancel();
+  const utter = new SpeechSynthesisUtterance(text);
+  utter.lang = "en-US";
+  utter.rate = rate;
+  utter.pitch = 1;
+  const voices = window.speechSynthesis.getVoices();
+  const enVoice = voices.find(v => v.lang.startsWith("en") && v.localService) || voices.find(v => v.lang.startsWith("en"));
+  if (enVoice) utter.voice = enVoice;
+
+  // 各単語が文字列内の何文字目から始まるかを事前計算しておく
+  // （onboundaryのcharIndexから、対応する単語インデックスを逆引きするため）
+  const wordStartIndices = [];
+  let cursor = 0;
+  words.forEach(w => {
+    const idx = text.indexOf(w, cursor);
+    wordStartIndices.push(idx === -1 ? cursor : idx);
+    cursor = (idx === -1 ? cursor : idx) + w.length;
+  });
+
+  utter.onboundary = (event) => {
+    if (cancelled) return;
+    if (event.name && event.name !== "word") return; // 文字境界等は無視し、単語境界のみ使う
+    usedBoundaryEvent = true;
+    // フォールバックタイマーが既に走っていたら不要なので止める
+    cleanup();
+    // charIndexに最も近い（かつ超えない）単語インデックスを探す
+    let wordIdx = 0;
+    for (let i = 0; i < wordStartIndices.length; i++) {
+      if (wordStartIndices[i] <= event.charIndex) wordIdx = i;
+      else break;
+    }
+    if (onHighlight) onHighlight(wordIdx);
+  };
+
+  utter.onstart = () => {
+    if (cancelled) return;
+    if (onHighlight) onHighlight(0);
+    // onboundaryが一定時間内に一度も発火しなければ、フォールバックに切り替える
+    // （iOS Safari等、onboundary非対応・不安定なブラウザ向けの保険）
+    const fallbackCheckTimer = setTimeout(() => {
+      if (cancelled || usedBoundaryEvent) return;
+      startFallbackHighlight();
+    }, 400);
+    fallbackTimers.push(fallbackCheckTimer);
+  };
+
+  // 単語の文字数に応じて時間を重み付けし、均等割りより自然な進み方にするフォールバック
+  function startFallbackHighlight() {
+    const weights = words.map(w => Math.max(1, w.length));
+    const totalWeight = weights.reduce((a, b) => a + b, 0);
+    const totalDurationMs = Math.max(600, text.length * (110 / rate)); // 文字数ベースの概算時間
+    let elapsed = 0;
+    words.forEach((_, i) => {
+      const timer = setTimeout(() => {
+        if (cancelled) return;
+        if (onHighlight) onHighlight(i);
+      }, elapsed);
+      fallbackTimers.push(timer);
+      elapsed += (weights[i] / totalWeight) * totalDurationMs;
+    });
+  }
+
+  utter.onend = () => {
+    cleanup();
+    if (cancelled) return;
+    if (onHighlight) onHighlight(-1);
+    if (onEnd) onEnd();
+  };
+
+  window.speechSynthesis.speak(utter);
+  return { cancel };
 }
 
 // ===================== API =====================
@@ -1867,6 +1968,7 @@ function PracticeTab({ phrases }) {
   const recordingTimeoutRef = useRef(null);
   const silenceTimeoutRef = useRef(null);
   const stopRecordingRef = useRef(null);
+  const highlightSessionRef = useRef(null); // speakWithWordHighlightのcancel関数を保持（画面遷移時に停止するため）
 
   // ---- 英作文・英訳練習 ----
   const [transSubMode, setTransSubMode] = useState("select"); // select(原文選択) | practice(練習中) | result
@@ -1973,6 +2075,10 @@ function PracticeTab({ phrases }) {
       if (recognitionRef.current) {
         try { recognitionRef.current.onend = null; recognitionRef.current.onerror = null; recognitionRef.current.onresult = null; recognitionRef.current.abort(); } catch {}
       }
+      if (highlightSessionRef.current) {
+        try { highlightSessionRef.current.cancel(); } catch {}
+        highlightSessionRef.current = null;
+      }
     };
   }, []);
 
@@ -2004,13 +2110,14 @@ function PracticeTab({ phrases }) {
 
   function playWithHighlight() {
     if (!currentPhrase) return;
+    // 既に再生中のセッションがあれば先に止める（連打対策）
+    if (highlightSessionRef.current) { try { highlightSessionRef.current.cancel(); } catch {} }
     setIsPlaying(true);
     setHighlightIdx(0);
-    const words = currentPhrase.english.split(" ");
-    speak(currentPhrase.english, () => { setIsPlaying(false); setHighlightIdx(-1); }, speechRate);
-    const durationMs = (2800 / speechRate);
-    words.forEach((_, i) => {
-      setTimeout(() => setHighlightIdx(i), (i / words.length) * durationMs);
+    highlightSessionRef.current = speakWithWordHighlight(currentPhrase.english, {
+      rate: speechRate,
+      onHighlight: (idx) => setHighlightIdx(idx),
+      onEnd: () => { setIsPlaying(false); setHighlightIdx(-1); highlightSessionRef.current = null; },
     });
   }
 
@@ -2182,7 +2289,7 @@ function PracticeTab({ phrases }) {
     return (
       <div style={{ padding:"16px", display:"flex", flexDirection:"column", height:"100%" }}>
         <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14 }}>
-          <button onClick={() => { stopSpeaking(); if (isRecording) stopRecording(); setMode("select"); }} style={{ background:"none", border:"none", cursor:"pointer", fontSize:20, color:C.muted }}>←</button>
+          <button onClick={() => { stopSpeaking(); if (highlightSessionRef.current) { highlightSessionRef.current.cancel(); highlightSessionRef.current = null; } setIsPlaying(false); setHighlightIdx(-1); if (isRecording) stopRecording(); setMode("select"); }} style={{ background:"none", border:"none", cursor:"pointer", fontSize:20, color:C.muted }}>←</button>
           <h3 style={{ margin:0, fontSize:16, fontWeight:800 }}>🎤 シャドーイング</h3>
           <span style={{ marginLeft:"auto", fontSize:10, padding:"2px 8px", borderRadius:99, background:levelBg(currentPhrase.level), color:levelColor(currentPhrase.level), fontWeight:700 }}>{currentPhrase.level}</span>
         </div>
@@ -2223,7 +2330,7 @@ function PracticeTab({ phrases }) {
               ))}
             </div>
             <button onClick={playWithHighlight} disabled={isPlaying} style={{ padding:12, borderRadius:10, border:"none", background:isPlaying?C.subtle:C.primary, color:"#fff", fontSize:14, fontWeight:700, cursor:"pointer" }}>{isPlaying ? "再生中…" : "🔊 音声を再生（ハイライト付き）"}</button>
-            <button onClick={() => setSubMode("record")} style={{ padding:14, borderRadius:12, border:"none", background:C.accent, color:"#fff", fontSize:15, fontWeight:700, cursor:"pointer" }}>録音してシャドーイング →</button>
+            <button onClick={() => { if (highlightSessionRef.current) { highlightSessionRef.current.cancel(); highlightSessionRef.current = null; } setIsPlaying(false); setHighlightIdx(-1); setSubMode("record"); }} style={{ padding:14, borderRadius:12, border:"none", background:C.accent, color:"#fff", fontSize:15, fontWeight:700, cursor:"pointer" }}>録音してシャドーイング →</button>
           </div>
         )}
 
