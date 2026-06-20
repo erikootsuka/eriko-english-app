@@ -586,22 +586,22 @@ function HomeTab({ phrases, vocab, progress, goals, onNavigate, earnedBadges = [
         <div style={{ position:"absolute", top:-10, right:-10, fontSize:60, opacity:0.08 }}>💬</div>
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
           <div style={{ fontSize:11, fontWeight:700, color:"#bae6fd" }}>💬 今週の一言フレーズ <span style={{ fontSize:9, opacity:0.7 }}>{getWeekKey()}</span></div>
-          <button onClick={() => fetchPhraseOfWeek(true)} disabled={powLoading || phrases.length===0} style={{ background:"rgba(255,255,255,0.15)", border:"none", borderRadius:6, padding:"3px 8px", color:"#fff", fontSize:10, cursor:"pointer", fontWeight:600 }}>{powLoading ? "更新中…" : "🔄 更新"}</button>
+          <button onClick={() => fetchPhraseOfWeek(true)} disabled={powLoading || phrases.length===0} style={{ background:"rgba(255,255,255,0.15)", border:"none", borderRadius:6, padding:"3px 8px", color:"#fff", fontSize:10, cursor: (powLoading || phrases.length===0) ? "default" : "pointer", fontWeight:600, opacity: (powLoading || phrases.length===0) ? 0.6 : 1 }}>{powLoading ? "⏳ 更新中…" : "🔄 更新"}</button>
         </div>
         {powLoading && !phraseOfWeek && (
           <div style={{ textAlign:"center", padding:"12px 0", fontSize:12, color:"#bae6fd", opacity:0.8 }}>AIが今週のフレーズを選んでいます…</div>
         )}
-        {phraseOfWeek && !powLoading && (
-          <>
+        {phraseOfWeek && (
+          <div style={{ opacity: powLoading ? 0.45 : 1, transition:"opacity 0.2s" }}>
             <div style={{ fontSize:15, fontWeight:800, lineHeight:1.5, marginBottom:4 }}>{phraseOfWeek.english}</div>
             <div style={{ fontSize:12, color:"#bae6fd", marginBottom:8 }}>{phraseOfWeek.japanese}</div>
             {phraseOfWeek.reason && <div style={{ fontSize:11, color:"rgba(255,255,255,0.75)", marginBottom:4 }}>📌 {phraseOfWeek.reason}</div>}
             {phraseOfWeek.usageTip && <div style={{ fontSize:11, color:"rgba(255,255,255,0.75)", marginBottom:10 }}>💡 {phraseOfWeek.usageTip}</div>}
             <div style={{ display:"flex", gap:8 }}>
-              <button onClick={() => onNavigate("diary")} style={{ flex:1, padding:"6px 0", borderRadius:8, border:"none", background:"rgba(255,255,255,0.2)", color:"#fff", fontSize:11, fontWeight:700, cursor:"pointer" }}>📔 日記で使う</button>
-              <button onClick={() => onNavigate("roleplay")} style={{ flex:1, padding:"6px 0", borderRadius:8, border:"none", background:"rgba(255,255,255,0.2)", color:"#fff", fontSize:11, fontWeight:700, cursor:"pointer" }}>🎭 会話で練習</button>
+              <button onClick={() => onNavigate("diary")} disabled={powLoading} style={{ flex:1, padding:"6px 0", borderRadius:8, border:"none", background:"rgba(255,255,255,0.2)", color:"#fff", fontSize:11, fontWeight:700, cursor:powLoading?"default":"pointer" }}>📔 日記で使う</button>
+              <button onClick={() => onNavigate("roleplay")} disabled={powLoading} style={{ flex:1, padding:"6px 0", borderRadius:8, border:"none", background:"rgba(255,255,255,0.2)", color:"#fff", fontSize:11, fontWeight:700, cursor:powLoading?"default":"pointer" }}>🎭 会話で練習</button>
             </div>
-          </>
+          </div>
         )}
         {!phraseOfWeek && !powLoading && phrases.length === 0 && (
           <div style={{ fontSize:12, color:"#bae6fd", textAlign:"center", padding:"8px 0" }}>表現集にフレーズを追加すると表示されます</div>
