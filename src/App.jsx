@@ -31,7 +31,7 @@ const VOCAB_CATS = ["すべて", "一般", "医薬品", "規制", "ビジネス"
 const PARTS = ["名詞", "動詞", "形容詞", "副詞", "イディオム", "フレーズ"];
 
 // ===================== VERSION =====================
-const BUILD_VERSION = "2026-06-20-p4";
+const BUILD_VERSION = "2026-06-20-p5";
 
 // ===================== WEEK KEY =====================
 function getWeekKey() {
@@ -2294,7 +2294,8 @@ function GoalsTab({ goals, setGoals, progress, setProgress, weaknesses, setWeakn
     e.target.value = "";
   }
 
-  // ---- 表現集(CSV)を復元 ----
+  // ---- 表現集(CSV)を追加登録 ----
+  // 既存データはそのまま残し、CSVの内容を追加する（英語が完全一致する項目は重複としてスキップ）
   function handleRestorePhrasesCSV(e) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -2302,29 +2303,42 @@ function GoalsTab({ goals, setGoals, progress, setProgress, weaknesses, setWeakn
     reader.onload = ev => {
       try {
         const rows = parseCSV(ev.target.result);
-        const restored = rows.filter(r => r.english && r.english.trim()).map(r => ({
+        const parsed = rows.filter(r => r.english && r.english.trim()).map(r => ({
           id: uid(),
           english: r.english || "",
           japanese: r.japanese || "",
           context: r.context || "",
           category: r.category || "インポート",
           level: LEVELS.includes(r.level) ? r.level : "中級",
-          source: r.source || "CSV復元",
+          source: r.source || "CSV一括登録",
           addedDate: r.addedDate || today(),
         }));
-        if (restored.length === 0) { setRestoreMsg("⚠️ 復元できる表現が見つかりませんでした。"); return; }
-        if (!window.confirm(`表現集をこのCSVの${restored.length}件で上書きします。\n本当に復元しますか？`)) return;
-        setPhrases(restored);
-        setRestoreMsg(`✅ 表現集を復元しました（${restored.length}件）`);
+        if (parsed.length === 0) { setRestoreMsg("⚠️ 追加できる表現が見つかりませんでした。"); return; }
+        // 既存の英語表現（前後空白・大文字小文字を無視）と完全一致するものは重複としてスキップする
+        const existingKeys = new Set(phrases.map(p => p.english.trim().toLowerCase()));
+        const seenInFile = new Set();
+        const toAdd = [];
+        let dupCount = 0;
+        parsed.forEach(p => {
+          const key = p.english.trim().toLowerCase();
+          if (existingKeys.has(key) || seenInFile.has(key)) { dupCount++; return; }
+          seenInFile.add(key);
+          toAdd.push(p);
+        });
+        if (toAdd.length === 0) { setRestoreMsg(`⚠️ すべて既存の表現と重複していたため追加されませんでした（${dupCount}件）。`); return; }
+        if (!window.confirm(`このCSVから${toAdd.length}件を表現集に追加します${dupCount > 0 ? `（重複${dupCount}件はスキップ）` : ""}。\n既存のデータは残ります。よろしいですか？`)) return;
+        setPhrases(prev => [...toAdd, ...prev]);
+        setRestoreMsg(`✅ 表現集に${toAdd.length}件追加しました${dupCount > 0 ? `（重複${dupCount}件はスキップ）` : ""}`);
       } catch {
-        setRestoreMsg("⚠️ 復元に失敗しました: CSVの形式が正しくありません。");
+        setRestoreMsg("⚠️ 追加に失敗しました: CSVの形式が正しくありません。");
       }
     };
     reader.readAsText(file);
     e.target.value = "";
   }
 
-  // ---- 語彙(CSV)を復元 ----
+  // ---- 語彙(CSV)を追加登録 ----
+  // 既存データはそのまま残し、CSVの内容を追加する（単語が完全一致する項目は重複としてスキップ）
   function handleRestoreVocabCSV(e) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -2332,7 +2346,7 @@ function GoalsTab({ goals, setGoals, progress, setProgress, weaknesses, setWeakn
     reader.onload = ev => {
       try {
         const rows = parseCSV(ev.target.result);
-        const restored = rows.filter(r => r.word && r.word.trim()).map(r => ({
+        const parsed = rows.filter(r => r.word && r.word.trim()).map(r => ({
           id: uid(),
           word: r.word || "",
           meaning: r.meaning || "",
@@ -2342,12 +2356,24 @@ function GoalsTab({ goals, setGoals, progress, setProgress, weaknesses, setWeakn
           level: LEVELS.includes(r.level) ? r.level : "中級",
           addedDate: r.addedDate || today(),
         }));
-        if (restored.length === 0) { setRestoreMsg("⚠️ 復元できる語彙が見つかりませんでした。"); return; }
-        if (!window.confirm(`語彙をこのCSVの${restored.length}件で上書きします。\n本当に復元しますか？`)) return;
-        setVocab(restored);
-        setRestoreMsg(`✅ 語彙を復元しました（${restored.length}件）`);
+        if (parsed.length === 0) { setRestoreMsg("⚠️ 追加できる語彙が見つかりませんでした。"); return; }
+        // 既存の単語（前後空白・大文字小文字を無視）と完全一致するものは重複としてスキップする
+        const existingKeys = new Set(vocab.map(v => v.word.trim().toLowerCase()));
+        const seenInFile = new Set();
+        const toAdd = [];
+        let dupCount = 0;
+        parsed.forEach(v => {
+          const key = v.word.trim().toLowerCase();
+          if (existingKeys.has(key) || seenInFile.has(key)) { dupCount++; return; }
+          seenInFile.add(key);
+          toAdd.push(v);
+        });
+        if (toAdd.length === 0) { setRestoreMsg(`⚠️ すべて既存の語彙と重複していたため追加されませんでした（${dupCount}件）。`); return; }
+        if (!window.confirm(`このCSVから${toAdd.length}件を語彙に追加します${dupCount > 0 ? `（重複${dupCount}件はスキップ）` : ""}。\n既存のデータは残ります。よろしいですか？`)) return;
+        setVocab(prev => [...toAdd, ...prev]);
+        setRestoreMsg(`✅ 語彙に${toAdd.length}件追加しました${dupCount > 0 ? `（重複${dupCount}件はスキップ）` : ""}`);
       } catch {
-        setRestoreMsg("⚠️ 復元に失敗しました: CSVの形式が正しくありません。");
+        setRestoreMsg("⚠️ 追加に失敗しました: CSVの形式が正しくありません。");
       }
     };
     reader.readAsText(file);
@@ -2517,20 +2543,20 @@ function GoalsTab({ goals, setGoals, progress, setProgress, weaknesses, setWeakn
           <div style={{ fontSize:10, color:C.subtle, marginBottom:14 }}>※ CSVはExcelで開けます。JSONは全データの完全バックアップです。</div>
 
           <div style={{ borderTop:`1px solid ${C.border}`, paddingTop:14 }}>
-            <div style={{ fontSize:12, fontWeight:700, color:C.mid, marginBottom:4 }}>📤 バックアップから復元</div>
-            <div style={{ fontSize:10, color:C.danger, marginBottom:10 }}>⚠️ 復元すると現在のデータは上書きされます（取り消せません）</div>
+            <div style={{ fontSize:12, fontWeight:700, color:C.mid, marginBottom:4 }}>📤 バックアップから復元・CSVで一括追加</div>
+            <div style={{ fontSize:10, color:C.muted, marginBottom:10 }}>⚠️ 全データ(JSON)は<strong style={{ color:C.danger }}>上書き</strong>、表現集・語彙(CSV)は既存データを残したまま<strong style={{ color:C.success }}>追加</strong>します（重複は自動スキップ）</div>
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
               <button onClick={() => fileInputJSON.current?.click()} style={{ background:C.card, border:`1px solid ${C.primary}33`, borderRadius:10, padding:"10px 8px", cursor:"pointer", textAlign:"left" }}>
                 <div style={{ fontSize:12, fontWeight:700, color:C.primary }}>全データ (JSON)</div>
-                <div style={{ fontSize:10, color:C.subtle, marginTop:2 }}>全部を復元</div>
+                <div style={{ fontSize:10, color:C.subtle, marginTop:2 }}>⚠️ 全部を上書き復元</div>
               </button>
               <button onClick={() => fileInputPhrasesCSV.current?.click()} style={{ background:C.card, border:`1px solid ${C.success}33`, borderRadius:10, padding:"10px 8px", cursor:"pointer", textAlign:"left" }}>
                 <div style={{ fontSize:12, fontWeight:700, color:C.success }}>表現集 (CSV)</div>
-                <div style={{ fontSize:10, color:C.subtle, marginTop:2 }}>表現集のみ復元</div>
+                <div style={{ fontSize:10, color:C.subtle, marginTop:2 }}>既存に追加（重複スキップ）</div>
               </button>
               <button onClick={() => fileInputVocabCSV.current?.click()} style={{ background:C.card, border:`1px solid ${C.purple}33`, borderRadius:10, padding:"10px 8px", cursor:"pointer", textAlign:"left" }}>
                 <div style={{ fontSize:12, fontWeight:700, color:C.purple }}>語彙 (CSV)</div>
-                <div style={{ fontSize:10, color:C.subtle, marginTop:2 }}>語彙のみ復元</div>
+                <div style={{ fontSize:10, color:C.subtle, marginTop:2 }}>既存に追加（重複スキップ）</div>
               </button>
             </div>
             <input ref={fileInputJSON} type="file" accept=".json,application/json" onChange={handleRestoreJSON} style={{ display:"none" }} />
