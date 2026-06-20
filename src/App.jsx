@@ -1899,10 +1899,15 @@ function PracticeTab({ phrases }) {
 }
 
 // ===================== GOALS TAB =====================
-function GoalsTab({ goals, setGoals, progress, weaknesses, phrases, vocab, earnedBadges = [], onGoalComplete }) {
+function GoalsTab({ goals, setGoals, progress, setProgress, weaknesses, setWeaknesses, phrases, setPhrases, vocab, setVocab, earnedBadges = [], onGoalComplete }) {
   const [showAdd, setShowAdd] = useState(false);
   const [showDownload, setShowDownload] = useState(false);
   const [newG, setNewG] = useState({ title:"", target:30, unit:"表現", deadline:"" });
+  // ---- データ復元（インポート） ----
+  const [restoreMsg, setRestoreMsg] = useState(""); // 成功・失敗メッセージ
+  const fileInputJSON = useRef(null);
+  const fileInputPhrasesCSV = useRef(null);
+  const fileInputVocabCSV = useRef(null);
 
   // ---- 成長レポート ----
   const [showReport, setShowReport] = useState(false);
@@ -1980,6 +1985,133 @@ function GoalsTab({ goals, setGoals, progress, weaknesses, phrases, vocab, earne
     if (type === "phrases") { headers = ["english","japanese","context","category","level","source","addedDate"]; rows = phrases.map(p => headers.map(h => `"${(p[h]||"").replace(/"/g,'""')}"`).join(",")); }
     else if (type === "vocab") { headers = ["word","meaning","partOfSpeech","example","category","level","addedDate"]; rows = vocab.map(v => headers.map(h => `"${(v[h]||"").replace(/"/g,'""')}"`).join(",")); }
     const csv = [headers.join(","), ...rows].join("\n"); const blob = new Blob(["\uFEFF"+csv], { type:"text/csv;charset=utf-8;" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `eriko-${type}-${today()}.csv`; a.click(); URL.revokeObjectURL(url);
+  }
+
+  // ---- CSV1行をパースする（ダブルクオート囲み・""エスケープに対応） ----
+  function parseCSVLine(line) {
+    const result = [];
+    let cur = "";
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (inQuotes) {
+        if (ch === '"') {
+          if (line[i + 1] === '"') { cur += '"'; i++; }
+          else { inQuotes = false; }
+        } else { cur += ch; }
+      } else {
+        if (ch === '"') inQuotes = true;
+        else if (ch === ",") { result.push(cur); cur = ""; }
+        else cur += ch;
+      }
+    }
+    result.push(cur);
+    return result;
+  }
+
+  function parseCSV(text) {
+    // BOM除去 + 改行統一
+    const clean = text.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n").trim();
+    const lines = clean.split("\n").filter(l => l.length > 0);
+    if (lines.length === 0) return [];
+    const headers = parseCSVLine(lines[0]);
+    return lines.slice(1).map(line => {
+      const values = parseCSVLine(line);
+      const obj = {};
+      headers.forEach((h, i) => { obj[h] = values[i] ?? ""; });
+      return obj;
+    });
+  }
+
+  // ---- 全データ(JSON)を復元 ----
+  function handleRestoreJSON(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      try {
+        const data = JSON.parse(ev.target.result);
+        const summary = [
+          data.phrases ? `表現集 ${data.phrases.length}件` : null,
+          data.vocab ? `語彙 ${data.vocab.length}件` : null,
+          data.goals ? `目標 ${data.goals.length}件` : null,
+          data.progress ? `演習履歴 ${data.progress.length}件` : null,
+          data.diary ? `日記 ${data.diary.length}件` : null,
+        ].filter(Boolean).join(" / ");
+        if (!window.confirm(`このバックアップで現在のデータを上書きします。\n${summary}\n\n本当に復元しますか？`)) return;
+        if (data.phrases) setPhrases(data.phrases);
+        if (data.vocab) setVocab(data.vocab);
+        if (data.goals) setGoals(data.goals);
+        if (data.progress) setProgress(data.progress);
+        if (data.weaknesses) setWeaknesses(data.weaknesses);
+        if (data.diary) save(STORAGE.diary, data.diary);
+        setRestoreMsg(`✅ 全データを復元しました（${summary}）`);
+      } catch {
+        setRestoreMsg("⚠️ 復元に失敗しました: ファイルの形式が正しくありません。");
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  }
+
+  // ---- 表現集(CSV)を復元 ----
+  function handleRestorePhrasesCSV(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      try {
+        const rows = parseCSV(ev.target.result);
+        const restored = rows.filter(r => r.english && r.english.trim()).map(r => ({
+          id: uid(),
+          english: r.english || "",
+          japanese: r.japanese || "",
+          context: r.context || "",
+          category: r.category || "インポート",
+          level: LEVELS.includes(r.level) ? r.level : "中級",
+          source: r.source || "CSV復元",
+          addedDate: r.addedDate || today(),
+        }));
+        if (restored.length === 0) { setRestoreMsg("⚠️ 復元できる表現が見つかりませんでした。"); return; }
+        if (!window.confirm(`表現集をこのCSVの${restored.length}件で上書きします。\n本当に復元しますか？`)) return;
+        setPhrases(restored);
+        setRestoreMsg(`✅ 表現集を復元しました（${restored.length}件）`);
+      } catch {
+        setRestoreMsg("⚠️ 復元に失敗しました: CSVの形式が正しくありません。");
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  }
+
+  // ---- 語彙(CSV)を復元 ----
+  function handleRestoreVocabCSV(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      try {
+        const rows = parseCSV(ev.target.result);
+        const restored = rows.filter(r => r.word && r.word.trim()).map(r => ({
+          id: uid(),
+          word: r.word || "",
+          meaning: r.meaning || "",
+          partOfSpeech: PARTS.includes(r.partOfSpeech) ? r.partOfSpeech : "名詞",
+          example: r.example || "",
+          category: r.category || "一般",
+          level: LEVELS.includes(r.level) ? r.level : "中級",
+          addedDate: r.addedDate || today(),
+        }));
+        if (restored.length === 0) { setRestoreMsg("⚠️ 復元できる語彙が見つかりませんでした。"); return; }
+        if (!window.confirm(`語彙をこのCSVの${restored.length}件で上書きします。\n本当に復元しますか？`)) return;
+        setVocab(restored);
+        setRestoreMsg(`✅ 語彙を復元しました（${restored.length}件）`);
+      } catch {
+        setRestoreMsg("⚠️ 復元に失敗しました: CSVの形式が正しくありません。");
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
   }
 
   return (
@@ -2142,7 +2274,34 @@ function GoalsTab({ goals, setGoals, progress, weaknesses, phrases, vocab, earne
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:10 }}>
             {[{ label:"全データ (JSON)", sub:"バックアップ用", onClick:downloadJSON, color:C.primary },{ label:"表現集 (CSV)", sub:`${phrases.length}件`, onClick:() => downloadCSV("phrases"), color:C.success },{ label:"語彙 (CSV)", sub:`${vocab.length}件`, onClick:() => downloadCSV("vocab"), color:C.purple }].map(b => (<button key={b.label} onClick={b.onClick} style={{ background:C.card, border:`1px solid ${b.color}33`, borderRadius:10, padding:"10px 8px", cursor:"pointer", textAlign:"left" }}><div style={{ fontSize:12, fontWeight:700, color:b.color }}>{b.label}</div><div style={{ fontSize:10, color:C.subtle, marginTop:2 }}>{b.sub}</div></button>))}
           </div>
-          <div style={{ fontSize:10, color:C.subtle }}>※ CSVはExcelで開けます。JSONは全データの完全バックアップです。</div>
+          <div style={{ fontSize:10, color:C.subtle, marginBottom:14 }}>※ CSVはExcelで開けます。JSONは全データの完全バックアップです。</div>
+
+          <div style={{ borderTop:`1px solid ${C.border}`, paddingTop:14 }}>
+            <div style={{ fontSize:12, fontWeight:700, color:C.mid, marginBottom:4 }}>📤 バックアップから復元</div>
+            <div style={{ fontSize:10, color:C.danger, marginBottom:10 }}>⚠️ 復元すると現在のデータは上書きされます（取り消せません）</div>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+              <button onClick={() => fileInputJSON.current?.click()} style={{ background:C.card, border:`1px solid ${C.primary}33`, borderRadius:10, padding:"10px 8px", cursor:"pointer", textAlign:"left" }}>
+                <div style={{ fontSize:12, fontWeight:700, color:C.primary }}>全データ (JSON)</div>
+                <div style={{ fontSize:10, color:C.subtle, marginTop:2 }}>全部を復元</div>
+              </button>
+              <button onClick={() => fileInputPhrasesCSV.current?.click()} style={{ background:C.card, border:`1px solid ${C.success}33`, borderRadius:10, padding:"10px 8px", cursor:"pointer", textAlign:"left" }}>
+                <div style={{ fontSize:12, fontWeight:700, color:C.success }}>表現集 (CSV)</div>
+                <div style={{ fontSize:10, color:C.subtle, marginTop:2 }}>表現集のみ復元</div>
+              </button>
+              <button onClick={() => fileInputVocabCSV.current?.click()} style={{ background:C.card, border:`1px solid ${C.purple}33`, borderRadius:10, padding:"10px 8px", cursor:"pointer", textAlign:"left" }}>
+                <div style={{ fontSize:12, fontWeight:700, color:C.purple }}>語彙 (CSV)</div>
+                <div style={{ fontSize:10, color:C.subtle, marginTop:2 }}>語彙のみ復元</div>
+              </button>
+            </div>
+            <input ref={fileInputJSON} type="file" accept=".json,application/json" onChange={handleRestoreJSON} style={{ display:"none" }} />
+            <input ref={fileInputPhrasesCSV} type="file" accept=".csv,text/csv" onChange={handleRestorePhrasesCSV} style={{ display:"none" }} />
+            <input ref={fileInputVocabCSV} type="file" accept=".csv,text/csv" onChange={handleRestoreVocabCSV} style={{ display:"none" }} />
+            {restoreMsg && (
+              <div style={{ marginTop:10, padding:"8px 10px", borderRadius:8, fontSize:11, background: restoreMsg.startsWith("✅") ? C.successLight : C.dangerLight, color: restoreMsg.startsWith("✅") ? C.success : C.danger, border:`1px solid ${restoreMsg.startsWith("✅") ? C.successMid : C.dangerMid}` }}>
+                {restoreMsg}
+              </div>
+            )}
+          </div>
         </div>
       )}
       <div style={{ background:`linear-gradient(135deg,${C.slate},#334155)`, borderRadius:14, padding:16, marginBottom:14, color:"#fff" }}>
@@ -2745,7 +2904,7 @@ export default function App() {
       case "quiz":     return <QuizTab phrases={phrases} vocab={vocab} setProgress={setProgress} weaknesses={weaknesses} setWeaknesses={setWeaknesses} />;
       case "diary":    return <DiaryTab setPhrases={setPhrases} weaknesses={weaknesses} />;
       case "roleplay": return <RoleplayTab />;
-      case "goals":    return <GoalsTab goals={goals} setGoals={setGoals} progress={progress} weaknesses={weaknesses} phrases={phrases} vocab={vocab} earnedBadges={earnedBadges} onGoalComplete={handleGoalComplete} />;
+      case "goals":    return <GoalsTab goals={goals} setGoals={setGoals} progress={progress} setProgress={setProgress} weaknesses={weaknesses} setWeaknesses={setWeaknesses} phrases={phrases} setPhrases={setPhrases} vocab={vocab} setVocab={setVocab} earnedBadges={earnedBadges} onGoalComplete={handleGoalComplete} />;
       case "vocab":     return <VocabTab vocab={vocab} setVocab={setVocab} />;
       case "vocab_add": return <VocabTab vocab={vocab} setVocab={setVocab} autoOpen={true} />;
       default:         return null;
