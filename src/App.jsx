@@ -31,7 +31,7 @@ const VOCAB_CATS = ["すべて", "一般", "医薬品", "規制", "ビジネス"
 const PARTS = ["名詞", "動詞", "形容詞", "副詞", "イディオム", "フレーズ"];
 
 // ===================== VERSION =====================
-const BUILD_VERSION = "2026-06-20-p5";
+const BUILD_VERSION = "2026-06-20-p6";
 
 // ===================== WEEK KEY =====================
 function getWeekKey() {
@@ -1398,7 +1398,10 @@ function QuizTab({ phrases, vocab, setProgress, weaknesses, setWeaknesses }) {
   const [checking, setChecking] = useState(false);
   const diaryEntries = load(STORAGE.diary, []);
   const diaryPool = buildDiaryQuizPool(diaryEntries);
-  const allItems = source === "phrases" ? phrases : source === "vocab" ? vocab.map(v => ({ ...v, english:v.word, japanese:v.meaning, context:v.example })) : diaryPool;
+  // クイズはja2en/en2ja/穴埋めいずれも日本語訳を使う場面があるため、
+  // 日本語訳が空の項目は出題対象から外す（表現集・語彙のみが対象。日記履歴は常に和訳が入るため対象外）
+  const hasJapanese = item => !!(item.japanese && item.japanese.trim());
+  const allItems = source === "phrases" ? phrases.filter(hasJapanese) : source === "vocab" ? vocab.filter(v => v.meaning && v.meaning.trim()).map(v => ({ ...v, english:v.word, japanese:v.meaning, context:v.example })) : diaryPool;
 
   function startQuiz() {
     let items = source === "diary" ? diaryPool : filterLv === "すべて" ? allItems : allItems.filter(p => p.level === filterLv);
@@ -1442,6 +1445,8 @@ function QuizTab({ phrases, vocab, setProgress, weaknesses, setWeaknesses }) {
           {[["phrases","📚 表現集"],["vocab","🔤 語彙"],["diary","📔 日記履歴"]].map(([v,l]) => (<button key={v} onClick={() => setSource(v)} style={{ flex:1, minWidth:80, padding:"8px 4px", borderRadius:8, border:`2px solid ${source===v?C.primary:C.border}`, background:source===v?C.primaryLight:C.card, cursor:"pointer", fontSize:12, fontWeight:source===v?700:400, color:source===v?C.primary:C.muted }}>{l}</button>))}
         </div>
         {source === "diary" && (<div style={{ marginTop:8, padding:"8px 10px", background:C.purpleLight, borderRadius:8, fontSize:11, color:C.purple }}>📔 日記の添削履歴から {diaryPool.length}件 出題できます。{diaryPool.length === 0 && <span style={{ color:C.warn }}> まだ日記を書いていません。</span>}</div>)}
+        {source === "phrases" && (() => { const excluded = phrases.length - phrases.filter(hasJapanese).length; return excluded > 0 ? (<div style={{ marginTop:8, padding:"8px 10px", background:C.warnLight, borderRadius:8, fontSize:11, color:C.warn }}>⚠️ 和訳なしの表現 {excluded}件は出題対象から除外されます</div>) : null; })()}
+        {source === "vocab" && (() => { const excluded = vocab.length - vocab.filter(v => v.meaning && v.meaning.trim()).length; return excluded > 0 ? (<div style={{ marginTop:8, padding:"8px 10px", background:C.warnLight, borderRadius:8, fontSize:11, color:C.warn }}>⚠️ 意味なしの語彙 {excluded}件は出題対象から除外されます</div>) : null; })()}
       </Field>
       {source !== "diary" && (<Field label="レベル"><div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>{["すべて", ...LEVELS].map(l => (<button key={l} onClick={() => setFilterLv(l)} style={{ padding:"5px 12px", borderRadius:99, border:"none", cursor:"pointer", fontSize:12, fontWeight:600, background:filterLv===l?(l==="すべて"?C.slate:levelColor(l)):C.surface, color:filterLv===l?"#fff":(l==="すべて"?C.muted:levelColor(l)) }}>{l}</button>))}</div></Field>)}
       <Field label="出題形式">{[{id:"ja2en",l:"🇯🇵→🇬🇧 日本語→英語"},{id:"en2ja",l:"🇬🇧→🇯🇵 英語→日本語"},{id:"fillblank",l:"📝 穴埋め"}].map(t => (<button key={t.id} onClick={() => setQuizType(t.id)} style={{ width:"100%", marginBottom:6, padding:"10px 12px", borderRadius:10, textAlign:"left", border:`2px solid ${quizType===t.id?C.primary:C.border}`, background:quizType===t.id?C.primaryLight:C.card, cursor:"pointer", fontSize:13, fontWeight:quizType===t.id?700:400, color:quizType===t.id?C.primary:C.slate }}>{t.l}</button>))}</Field>
@@ -1688,7 +1693,12 @@ function PracticeTab({ phrases }) {
     { rate: 1.3, label: "🐇 速い" },
   ];
 
-  const filtered = cat === "すべて" ? phrases : phrases.filter(p => p.category === cat);
+  // シャドーイング・ディクテーションは結果画面で日本語訳を表示する場面があり、
+  // 和訳なしの表現は練習として成り立たないため出題対象から除外する
+  const hasJapanese = p => !!(p.japanese && p.japanese.trim());
+  const withJapanese = phrases.filter(hasJapanese);
+  const missingCount = phrases.length - withJapanese.length;
+  const filtered = cat === "すべて" ? withJapanese : withJapanese.filter(p => p.category === cat);
   const dictFiltered = dictLevel === "すべて" ? filtered : filtered.filter(p => p.level === dictLevel);
 
   // アンマウント時に音声認識・タイマーを確実に破棄（画面遷移でフリーズしないように）
@@ -2083,11 +2093,12 @@ function PracticeTab({ phrases }) {
       <div style={{ background:C.card, borderRadius:12, padding:14, border:`1px solid ${C.border}`, marginBottom:14 }}>
         <div style={{ fontSize:11, fontWeight:700, color:C.mid, marginBottom:8 }}>カテゴリーで絞り込む</div>
         <div style={{ display:"flex", gap:5, flexWrap:"wrap" }}>
-          {["すべて", ...[...new Set(phrases.map(p => p.category))]].map(c => (
+          {["すべて", ...[...new Set(withJapanese.map(p => p.category))]].map(c => (
             <button key={c} onClick={() => setCat(c)} style={{ padding:"4px 10px", borderRadius:99, border:"none", cursor:"pointer", fontSize:11, fontWeight:600, background:cat===c?C.primary:C.surface, color:cat===c?"#fff":C.muted }}>{c}</button>
           ))}
         </div>
         <div style={{ fontSize:11, color:C.subtle, marginTop:8 }}>{filtered.length}件の表現から出題</div>
+        {missingCount > 0 && (<div style={{ fontSize:10, color:C.warn, marginTop:4 }}>⚠️ 和訳なしの表現 {missingCount}件は対象外です</div>)}
       </div>
 
       <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
