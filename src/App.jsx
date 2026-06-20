@@ -31,8 +31,20 @@ function savePhraseCategories(cats) {
 const VOCAB_CATS = ["すべて", "一般", "医薬品", "規制", "ビジネス", "イディオム"];
 const PARTS = ["名詞", "動詞", "形容詞", "副詞", "イディオム", "フレーズ"];
 
+// ===================== AUTO-BACKUP (IndexedDB + リマインダー) =====================
+// バックアップ促進リマインダーのしきい値: 「7日経過」または「学習50回」のどちらか早い方
+const BACKUP_REMINDER_DAYS = 7;
+const BACKUP_REMINDER_STUDY_COUNT = 50;
+const BACKUP_META_KEY = "eriko_backup_meta"; // { lastBackupAt: ISOString, progressCountAtBackup: number }
+
+// 最後にバックアップした日時と、その時点でのprogress件数を記録する。
+// 次回以降は「その時点からどれだけ経過/学習したか」でリマインダー条件を判定する。
+function markBackupDone(progressCount = 0) {
+  save(BACKUP_META_KEY, { lastBackupAt: new Date().toISOString(), progressCountAtBackup: progressCount });
+}
+
 // ===================== VERSION =====================
-const BUILD_VERSION = "2026-06-20-p10";
+const BUILD_VERSION = "2026-06-20-p11";
 
 // ===================== WEEK KEY =====================
 function getWeekKey() {
@@ -99,6 +111,69 @@ const uid = () => "id" + Date.now() + Math.random().toString(36).slice(2,5);
 const today = () => new Date().toISOString().slice(0,10);
 const load = (k, fb) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : fb; } catch { return fb; } };
 const save = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
+
+// ===================== INDEXEDDB MIRROR (自動二重保存) =====================
+// localStorageの偶発的な初期化・破損に対する保険として、学習データのスナップショットを
+// IndexedDBにも非同期で複製する。読み書きはPromiseベースの薄いラッパーで提供する。
+const IDB_NAME = "eriko_english_backup";
+const IDB_STORE = "snapshots";
+const IDB_KEY = "latest";
+
+function idbOpen() {
+  return new Promise((resolve, reject) => {
+    if (!window.indexedDB) { reject(new Error("IndexedDB not supported")); return; }
+    const req = indexedDB.open(IDB_NAME, 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(IDB_STORE)) db.createObjectStore(IDB_STORE);
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+// data: { phrases, vocab, goals, progress, weaknesses, diary }
+async function idbSaveSnapshot(data) {
+  try {
+    const db = await idbOpen();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(IDB_STORE, "readwrite");
+      tx.objectStore(IDB_STORE).put({ data, savedAt: new Date().toISOString() }, IDB_KEY);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+    db.close();
+  } catch {
+    // IndexedDB未対応・失敗時は静かに諦める（localStorageが本筋なのでUXは妨げない）
+  }
+}
+
+// 戻り値: { data, savedAt } または null（バックアップが無い/読めない場合）
+async function idbLoadSnapshot() {
+  try {
+    const db = await idbOpen();
+    const result = await new Promise((resolve, reject) => {
+      const tx = db.transaction(IDB_STORE, "readonly");
+      const req = tx.objectStore(IDB_STORE).get(IDB_KEY);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => reject(req.error);
+    });
+    db.close();
+    return result;
+  } catch {
+    return null;
+  }
+}
+
+// 現在のphrases/vocabが、初期サンプルデータそのまま（未変更）かどうかを判定する。
+// サンプルIDがすべて含まれ、かつ件数も一致する場合に「サンプルのまま」と見なす。
+function isSampleData(phrases, vocab) {
+  const samplePhraseIds = new Set(SAMPLE_PHRASES.map(p => p.id));
+  const sampleVocabIds = new Set(SAMPLE_VOCAB.map(v => v.id));
+  const phrasesMatch = phrases.length === SAMPLE_PHRASES.length && phrases.every(p => samplePhraseIds.has(p.id));
+  const vocabMatch = vocab.length === SAMPLE_VOCAB.length && vocab.every(v => sampleVocabIds.has(v.id));
+  return phrasesMatch && vocabMatch;
+}
 
 function getStreak(prog) {
   if (!prog.length) return 0;
@@ -2617,6 +2692,7 @@ function GoalsTab({ goals, setGoals, progress, setProgress, weaknesses, setWeakn
     const data = { exportDate:today(), phrases, vocab, goals, progress, weaknesses, diary:load(STORAGE.diary,[]) };
     const blob = new Blob([JSON.stringify(data,null,2)], { type:"application/json" });
     const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `eriko-english-${today()}.json`; a.click(); URL.revokeObjectURL(url);
+    markBackupDone();
   }
   function downloadCSV(type) {
     let rows = [], headers = [];
@@ -2793,6 +2869,57 @@ function GoalsTab({ goals, setGoals, progress, setProgress, weaknesses, setWeakn
     setRestoreMsg(`✅ ${targetCount}件の用途タグを再判定しました`);
   }
 
+  // ---- IndexedDBバックアップから復元 ----
+  const [idbStatus, setIdbStatus] = useState(null); // { hasData, savedAt, counts } | "checking" | null
+  const [showIdbRestore, setShowIdbRestore] = useState(false);
+
+  async function checkIdbBackup() {
+    setIdbStatus("checking");
+    try {
+      const snap = await idbLoadSnapshot();
+      if (!snap) { setIdbStatus({ hasData: false }); return; }
+      setIdbStatus({
+        hasData: true,
+        savedAt: snap.savedAt,
+        counts: {
+          phrases: snap.data?.phrases?.length || 0,
+          vocab: snap.data?.vocab?.length || 0,
+          goals: snap.data?.goals?.length || 0,
+          progress: snap.data?.progress?.length || 0,
+          diary: snap.data?.diary?.length || 0,
+        },
+      });
+    } catch {
+      setIdbStatus({ hasData: false });
+    }
+  }
+
+  async function restoreFromIdb() {
+    try {
+      const snap = await idbLoadSnapshot();
+      if (!snap || !snap.data) { setRestoreMsg("⚠️ IndexedDBにバックアップが見つかりませんでした。"); return; }
+      const d = snap.data;
+      const summary = [
+        d.phrases ? `表現集 ${d.phrases.length}件` : null,
+        d.vocab ? `語彙 ${d.vocab.length}件` : null,
+        d.goals ? `目標 ${d.goals.length}件` : null,
+        d.progress ? `演習履歴 ${d.progress.length}件` : null,
+        d.diary ? `日記 ${d.diary.length}件` : null,
+      ].filter(Boolean).join(" / ");
+      if (!window.confirm(`IndexedDBの自動バックアップ（保存日時: ${snap.savedAt || "不明"}）で現在のデータを上書きします。\n${summary}\n\n本当に復元しますか？`)) return;
+      if (d.phrases) setPhrases(d.phrases);
+      if (d.vocab) setVocab(d.vocab);
+      if (d.goals) setGoals(d.goals);
+      if (d.progress) setProgress(d.progress);
+      if (d.weaknesses) setWeaknesses(d.weaknesses);
+      if (d.diary) save(STORAGE.diary, d.diary);
+      setRestoreMsg(`✅ IndexedDBのバックアップから復元しました（${summary}）`);
+      setShowIdbRestore(false);
+    } catch {
+      setRestoreMsg("⚠️ IndexedDBからの復元に失敗しました。");
+    }
+  }
+
   return (
     <div style={{ overflowY:"auto", padding:"16px" }}>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
@@ -2954,6 +3081,29 @@ function GoalsTab({ goals, setGoals, progress, setProgress, weaknesses, setWeakn
             {[{ label:"全データ (JSON)", sub:"バックアップ用", onClick:downloadJSON, color:C.primary },{ label:"表現集 (CSV)", sub:`${phrases.length}件`, onClick:() => downloadCSV("phrases"), color:C.success },{ label:"語彙 (CSV)", sub:`${vocab.length}件`, onClick:() => downloadCSV("vocab"), color:C.purple }].map(b => (<button key={b.label} onClick={b.onClick} style={{ background:C.card, border:`1px solid ${b.color}33`, borderRadius:10, padding:"10px 8px", cursor:"pointer", textAlign:"left" }}><div style={{ fontSize:12, fontWeight:700, color:b.color }}>{b.label}</div><div style={{ fontSize:10, color:C.subtle, marginTop:2 }}>{b.sub}</div></button>))}
           </div>
           <div style={{ fontSize:10, color:C.subtle, marginBottom:14 }}>※ CSVはExcelで開けます。JSONは全データの完全バックアップです。</div>
+
+          {/* ---- 自動バックアップ（IndexedDB）の状態確認・復元 ---- */}
+          <div style={{ borderTop:`1px solid ${C.border}`, paddingTop:14, marginBottom:14 }}>
+            <div style={{ fontSize:12, fontWeight:700, color:C.mid, marginBottom:4 }}>🛟 自動バックアップ（IndexedDB）</div>
+            <div style={{ fontSize:10, color:C.muted, marginBottom:10 }}>このブラウザ内に、操作のたびに自動でデータの二重保存を行っています。localStorageが消えてしまった場合の保険です。</div>
+            {!idbStatus ? (
+              <button onClick={checkIdbBackup} style={{ width:"100%", background:C.card, border:`1px solid ${C.primary}33`, borderRadius:10, padding:"10px 8px", cursor:"pointer", textAlign:"left" }}>
+                <div style={{ fontSize:12, fontWeight:700, color:C.primary }}>自動バックアップの状態を確認する</div>
+              </button>
+            ) : idbStatus === "checking" ? (
+              <div style={{ fontSize:11, color:C.subtle, textAlign:"center", padding:"8px 0" }}>確認中…</div>
+            ) : idbStatus.hasData ? (
+              <div style={{ background:C.successLight, border:`1px solid ${C.successMid}`, borderRadius:10, padding:10 }}>
+                <div style={{ fontSize:11, fontWeight:700, color:C.success, marginBottom:6 }}>✅ バックアップあり（保存日時: {idbStatus.savedAt ? new Date(idbStatus.savedAt).toLocaleString("ja-JP") : "不明"}）</div>
+                <div style={{ fontSize:10, color:C.mid, marginBottom:8 }}>
+                  表現集 {idbStatus.counts.phrases}件 / 語彙 {idbStatus.counts.vocab}件 / 目標 {idbStatus.counts.goals}件 / 演習履歴 {idbStatus.counts.progress}件 / 日記 {idbStatus.counts.diary}件
+                </div>
+                <button onClick={restoreFromIdb} style={{ width:"100%", padding:"8px 0", borderRadius:8, border:"none", background:C.success, color:"#fff", fontSize:12, fontWeight:700, cursor:"pointer" }}>このバックアップから復元する</button>
+              </div>
+            ) : (
+              <div style={{ fontSize:11, color:C.subtle, textAlign:"center", padding:"8px 0" }}>まだ自動バックアップが見つかりません</div>
+            )}
+          </div>
 
           <div style={{ borderTop:`1px solid ${C.border}`, paddingTop:14, marginBottom:14 }}>
             <div style={{ fontSize:12, fontWeight:700, color:C.mid, marginBottom:4 }}>🔧 用途タグの一括再判定</div>
@@ -3555,12 +3705,70 @@ export default function App() {
   const [earnedBadges, setEarnedBadges] = useState(() => load(STORAGE.badges, []));
   const [newBadge, setNewBadge] = useState(null);
   const [celebrationGoal, setCelebrationGoal] = useState(null);
+  const [backupReminder, setBackupReminder] = useState(null); // { reason } | null
 
   useEffect(() => { save(STORAGE.phrases, phrases); }, [phrases]);
   useEffect(() => { save(STORAGE.vocab, vocab); }, [vocab]);
   useEffect(() => { save(STORAGE.goals, goals); }, [goals]);
   useEffect(() => { save(STORAGE.progress, progress); }, [progress]);
   useEffect(() => { save(STORAGE.weaknesses, weaknesses); }, [weaknesses]);
+
+  // ---- IndexedDB 自動ミラーリング（二重保存） ----
+  // データが変わるたびにIndexedDBへもスナップショットを保存する（localStorage破損時の保険）。
+  // 軽いデバウンスをかけて、連続更新時に書き込みが過剰に発生しないようにする。
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      idbSaveSnapshot({
+        phrases,
+        vocab,
+        goals,
+        progress,
+        weaknesses,
+        diary: load(STORAGE.diary, []),
+      });
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [phrases, vocab, goals, progress, weaknesses]);
+
+  // ---- 起動時チェック：localStorageが初期サンプルのままなのにIndexedDBに別のデータがある場合は復元を提案 ----
+  useEffect(() => {
+    (async () => {
+      try {
+        const looksLikeSample = isSampleData(phrases, vocab);
+        if (!looksLikeSample) return;
+        const snap = await idbLoadSnapshot();
+        if (!snap || !snap.data) return;
+        const idbHasMore = (snap.data.phrases?.length || 0) > SAMPLE_PHRASES.length
+          || (snap.data.vocab?.length || 0) > SAMPLE_VOCAB.length
+          || (snap.data.progress?.length || 0) > 0
+          || (snap.data.diary?.length || 0) > 0;
+        if (idbHasMore) {
+          setBackupReminder({ type: "idb_recovery", snapshot: snap });
+        }
+      } catch {}
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ---- 定期的なバックアップ促進（7日経過 または 学習20回のどちらか早い方） ----
+  useEffect(() => {
+    if (backupReminder) return; // IndexedDB復元提案が出ている間は二重表示しない
+    const lastBackup = load(BACKUP_META_KEY, null);
+    const lastBackupAt = lastBackup?.lastBackupAt || null;
+    const lastBackupProgressCount = lastBackup?.progressCountAtBackup || 0;
+
+    const daysSince = lastBackupAt ? (Date.now() - new Date(lastBackupAt).getTime()) / 86400000 : Infinity;
+    const studiedSince = progress.length - lastBackupProgressCount;
+
+    if (daysSince >= BACKUP_REMINDER_DAYS || studiedSince >= BACKUP_REMINDER_STUDY_COUNT) {
+      // すでに今日表示済みなら再表示しない
+      const dismissedToday = load("eriko_backup_reminder_dismissed", null);
+      if (dismissedToday !== today()) {
+        setBackupReminder({ type: "periodic_prompt" });
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [progress.length]);
 
   // バッジチェック
   useEffect(() => {
@@ -3582,6 +3790,30 @@ export default function App() {
     const goal = goals.find(g => g.id === goalId);
     if (goal) setCelebrationGoal(goal);
     setGoals(prev => prev.map(g => g.id === goalId ? { ...g, completed: true } : g));
+  }
+
+  function handleRestoreFromIdbSnapshot(snap) {
+    const d = snap.data;
+    if (d.phrases) setPhrases(d.phrases);
+    if (d.vocab) setVocab(d.vocab);
+    if (d.goals) setGoals(d.goals);
+    if (d.progress) setProgress(d.progress);
+    if (d.weaknesses) setWeaknesses(d.weaknesses);
+    if (d.diary) save(STORAGE.diary, d.diary);
+    setBackupReminder(null);
+  }
+
+  function handleBackupNow() {
+    const data = { exportDate:today(), phrases, vocab, goals, progress, weaknesses, diary:load(STORAGE.diary,[]) };
+    const blob = new Blob([JSON.stringify(data,null,2)], { type:"application/json" });
+    const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `eriko-english-${today()}.json`; a.click(); URL.revokeObjectURL(url);
+    markBackupDone(progress.length);
+    setBackupReminder(null);
+  }
+
+  function dismissBackupReminder() {
+    save("eriko_backup_reminder_dismissed", today());
+    setBackupReminder(null);
   }
 
   const renderTab = () => {
@@ -3619,6 +3851,45 @@ export default function App() {
       {/* 目標達成おめでとう */}
       {celebrationGoal && (
         <GoalCelebration goal={celebrationGoal} onClose={() => setCelebrationGoal(null)} />
+      )}
+
+      {/* IndexedDB復元提案（localStorageが初期サンプルに戻ってしまった可能性がある場合） */}
+      {backupReminder?.type === "idb_recovery" && (
+        <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.5)", zIndex:300, display:"flex", alignItems:"center", justifyContent:"center", padding:20 }}>
+          <div style={{ background:C.card, borderRadius:18, padding:22, maxWidth:340, width:"100%", boxShadow:"0 20px 60px rgba(0,0,0,0.3)" }}>
+            <div style={{ fontSize:32, marginBottom:8, textAlign:"center" }}>🛟</div>
+            <div style={{ fontSize:15, fontWeight:800, color:C.slate, textAlign:"center", marginBottom:8 }}>以前のデータが見つかりました</div>
+            <div style={{ fontSize:12, color:C.muted, lineHeight:1.6, marginBottom:14 }}>
+              現在の表示データは初期サンプルのようですが、このブラウザの自動バックアップ（保存日時: {backupReminder.snapshot.savedAt ? new Date(backupReminder.snapshot.savedAt).toLocaleString("ja-JP") : "不明"}）に、より多くのデータが見つかりました。復元しますか？
+            </div>
+            <div style={{ background:C.surface, borderRadius:10, padding:10, marginBottom:14, fontSize:11, color:C.mid }}>
+              表現集 {backupReminder.snapshot.data?.phrases?.length || 0}件 / 語彙 {backupReminder.snapshot.data?.vocab?.length || 0}件 / 演習履歴 {backupReminder.snapshot.data?.progress?.length || 0}件 / 日記 {backupReminder.snapshot.data?.diary?.length || 0}件
+            </div>
+            <div style={{ display:"flex", gap:10 }}>
+              <button onClick={dismissBackupReminder} style={{ flex:1, padding:12, borderRadius:10, border:`1px solid ${C.border}`, background:C.surface, color:C.muted, fontSize:13, cursor:"pointer" }}>今はしない</button>
+              <button onClick={() => handleRestoreFromIdbSnapshot(backupReminder.snapshot)} style={{ flex:1, padding:12, borderRadius:10, border:"none", background:C.success, color:"#fff", fontSize:13, fontWeight:700, cursor:"pointer" }}>復元する</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 定期的なバックアップ促進 */}
+      {backupReminder?.type === "periodic_prompt" && (
+        <div style={{ position:"fixed", bottom:70, left:"50%", transform:"translateX(-50%)", zIndex:300, width:"calc(100% - 32px)", maxWidth:398 }}>
+          <div style={{ background:C.card, borderRadius:14, padding:16, boxShadow:"0 8px 32px rgba(0,0,0,0.25)", border:`1px solid ${C.border}` }}>
+            <div style={{ display:"flex", alignItems:"flex-start", gap:10 }}>
+              <div style={{ fontSize:24, flexShrink:0 }}>📥</div>
+              <div style={{ flex:1 }}>
+                <div style={{ fontSize:13, fontWeight:800, color:C.slate, marginBottom:4 }}>バックアップを取りましょう</div>
+                <div style={{ fontSize:11, color:C.muted, lineHeight:1.5 }}>しばらくバックアップを取っていません。学習データを守るため、全データ(JSON)をダウンロードしておくと安心です。</div>
+              </div>
+            </div>
+            <div style={{ display:"flex", gap:8, marginTop:12 }}>
+              <button onClick={dismissBackupReminder} style={{ flex:1, padding:10, borderRadius:8, border:`1px solid ${C.border}`, background:C.surface, color:C.muted, fontSize:12, cursor:"pointer" }}>後で</button>
+              <button onClick={handleBackupNow} style={{ flex:1, padding:10, borderRadius:8, border:"none", background:C.primary, color:"#fff", fontSize:12, fontWeight:700, cursor:"pointer" }}>今すぐバックアップ</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
