@@ -31,7 +31,7 @@ const VOCAB_CATS = ["すべて", "一般", "医薬品", "規制", "ビジネス"
 const PARTS = ["名詞", "動詞", "形容詞", "副詞", "イディオム", "フレーズ"];
 
 // ===================== VERSION =====================
-const BUILD_VERSION = "2026-06-18-p3";
+const BUILD_VERSION = "2026-06-20-p3";
 
 // ===================== WEEK KEY =====================
 function getWeekKey() {
@@ -412,7 +412,8 @@ function HomeTab({ phrases, vocab, progress, goals, onNavigate, earnedBadges = [
   const [locationMode, setLocationMode] = useState("home");
   const [menuTasks, setMenuTasks] = useState(() => load("eriko_today_menu_" + today(), null));
   const [menuLoading, setMenuLoading] = useState(false);
-  const [menuChecked, setMenuChecked] = useState({});
+  // FIX: チェック状態をlocalStorageから復元し、画面遷移しても保持されるようにする
+  const [menuChecked, setMenuChecked] = useState(() => load("eriko_menu_checked_" + today(), {}));
   const [menuOpen, setMenuOpen] = useState(false);
 
   // ---- リマインダー ----
@@ -432,11 +433,22 @@ function HomeTab({ phrases, vocab, progress, goals, onNavigate, earnedBadges = [
       if (m) {
         const tasks = JSON.parse(m[0]);
         setMenuTasks(tasks);
+        // FIX: 新しいメニューを作ったときはチェック状態をリセットし、保存も消す
         setMenuChecked({});
+        save("eriko_menu_checked_" + today(), {});
         save("eriko_today_menu_" + today(), tasks);
       }
     } catch {}
     setMenuLoading(false);
+  }
+
+  // FIX: チェックのトグル時にlocalStorageへ保存するヘルパー
+  function toggleMenuChecked(i) {
+    setMenuChecked(prev => {
+      const updated = { ...prev, [i]: !prev[i] };
+      save("eriko_menu_checked_" + today(), updated);
+      return updated;
+    });
   }
 
   return (
@@ -546,7 +558,7 @@ function HomeTab({ phrases, vocab, progress, goals, onNavigate, earnedBadges = [
               <>
                 <div style={{ fontSize:10, color:C.muted, marginBottom:10 }}>{locationMode === "train" ? "🚃 電車中モード" : "🏠 自宅モード"} • {today()}</div>
                 {menuTasks.map((task, i) => (
-                  <div key={i} onClick={() => setMenuChecked(prev => ({ ...prev, [i]: !prev[i] }))} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 10px", borderRadius:10, marginBottom:6, background: menuChecked[i] ? C.successLight : C.surface, border:`1px solid ${menuChecked[i] ? C.successMid : C.border}`, cursor:"pointer", transition:"all 0.2s" }}>
+                  <div key={i} onClick={() => toggleMenuChecked(i)} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 10px", borderRadius:10, marginBottom:6, background: menuChecked[i] ? C.successLight : C.surface, border:`1px solid ${menuChecked[i] ? C.successMid : C.border}`, cursor:"pointer", transition:"all 0.2s" }}>
                     <div style={{ width:20, height:20, borderRadius:99, border:`2px solid ${menuChecked[i] ? C.success : C.border}`, background: menuChecked[i] ? C.success : "transparent", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
                       {menuChecked[i] && <span style={{ color:"#fff", fontSize:11, fontWeight:900 }}>✓</span>}
                     </div>
@@ -561,7 +573,7 @@ function HomeTab({ phrases, vocab, progress, goals, onNavigate, earnedBadges = [
                 ))}
                 <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginTop:8 }}>
                   <div style={{ fontSize:10, color:C.subtle }}>{Object.values(menuChecked).filter(Boolean).length} / {menuTasks.length} 完了</div>
-                  <button onClick={() => { setMenuTasks(null); setMenuChecked({}); fetchTodayMenu(); }} style={{ fontSize:10, color:C.muted, background:"none", border:"none", cursor:"pointer" }}>🔄 作り直す</button>
+                  <button onClick={() => { setMenuTasks(null); setMenuChecked({}); save("eriko_menu_checked_" + today(), {}); fetchTodayMenu(); }} style={{ fontSize:10, color:C.muted, background:"none", border:"none", cursor:"pointer" }}>🔄 作り直す</button>
                 </div>
               </>
             )}
