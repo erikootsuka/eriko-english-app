@@ -44,7 +44,7 @@ function markBackupDone(progressCount = 0) {
 }
 
 // ===================== VERSION =====================
-const BUILD_VERSION = "2026-06-20-p12";
+const BUILD_VERSION = "2026-06-21-p13";
 
 // ===================== WEEK KEY =====================
 function getWeekKey() {
@@ -2965,6 +2965,17 @@ function GoalsTab({ goals, setGoals, progress, setProgress, weaknesses, setWeakn
     e.target.value = "";
   }
 
+  // ---- 表現集を全削除（一時的な復旧用） ----
+  // CSV取り込みの不具合などで表現集の内容が壊れた場合に、いったん空にしてから
+  // 正しいCSVを入れ直すための機能。誤操作防止のため2段階の確認を行う。
+  function clearAllPhrases() {
+    if (phrases.length === 0) { setRestoreMsg("⚠️ 表現集はすでに空です。"); return; }
+    if (!window.confirm(`本当に表現集を全件削除しますか？\n現在 ${phrases.length}件 → 0件になります。\nこの操作は取り消せません（事前にJSONバックアップを取ることをおすすめします）。`)) return;
+    if (!window.confirm("最終確認：本当に全削除してよろしいですか？")) return;
+    setPhrases([]);
+    setRestoreMsg("✅ 表現集を全件削除しました（0件）");
+  }
+
   // ---- 既存の表現集データに新しい用途タグ判定ルールを一括適用 ----
   // 文字数しきい値に基づき、すべての既存表現のusagesを再計算する。
   // 個別に手動でカスタマイズした項目も巻き込んで再判定される点に注意（実行前に確認ダイアログを出す）。
@@ -3221,7 +3232,7 @@ function GoalsTab({ goals, setGoals, progress, setProgress, weaknesses, setWeakn
             </button>
           </div>
 
-          <div style={{ borderTop:`1px solid ${C.border}`, paddingTop:14 }}>
+          <div style={{ borderTop:`1px solid ${C.border}`, paddingTop:14, marginBottom:14 }}>
             <div style={{ fontSize:12, fontWeight:700, color:C.mid, marginBottom:4 }}>📤 バックアップから復元・CSVで一括追加</div>
             <div style={{ fontSize:10, color:C.muted, marginBottom:10 }}>⚠️ 全データ(JSON)は<strong style={{ color:C.danger }}>上書き</strong>、表現集・語彙(CSV)は既存データを残したまま<strong style={{ color:C.success }}>追加</strong>します（重複は自動スキップ）</div>
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
@@ -3246,6 +3257,15 @@ function GoalsTab({ goals, setGoals, progress, setProgress, weaknesses, setWeakn
                 {restoreMsg}
               </div>
             )}
+          </div>
+
+          {/* ---- 表現集を全削除（一時的な復旧用） ---- */}
+          <div style={{ borderTop:`1px solid ${C.dangerMid}`, paddingTop:14 }}>
+            <div style={{ fontSize:12, fontWeight:700, color:C.danger, marginBottom:4 }}>🗑️ 表現集を全削除（一時的な復旧用）</div>
+            <div style={{ fontSize:10, color:C.muted, marginBottom:10 }}>CSV取り込みの不具合などで表現集が壊れた場合に、いったん空にしてからCSVを入れ直すための機能です。実行前に全データ(JSON)のバックアップをおすすめします。</div>
+            <button onClick={clearAllPhrases} style={{ width:"100%", background:C.dangerLight, border:`1px solid ${C.dangerMid}`, borderRadius:10, padding:"10px 8px", cursor:"pointer", textAlign:"center" }}>
+              <div style={{ fontSize:12, fontWeight:700, color:C.danger }}>表現集を全削除する（現在 {phrases.length}件）</div>
+            </button>
           </div>
         </div>
       )}
@@ -3790,7 +3810,7 @@ function RoleplayTab() {
         <Modal onClose={() => setShowAddScenario(false)}>
           <h4 style={{ margin:"0 0 12px", fontSize:15 }}>シナリオを自作</h4>
           <Field label="タイトル"><input value={newScenario.title} onChange={e => setNewScenario(s => ({ ...s, title:e.target.value }))} placeholder="例: 医師との面談" style={inp} /></Field>
-          <Field label="カテゴリー"><select value={newScenario.category} onChange={e => setNewScenario(s => ({ ...s, category:e.target.value }))} style={inp}>{["🤿 ダイビング","💼 職場","🏛️ 規制当局","🎪 展示会","💬 日常"].map(c => <option key={c}>{c}</option>)}</select></Field>
+          <Field label="カテゴリー"><select value={newScenario.category} onChange={e => setNewScenario(s => ({ ...s, category:e.target.value }))} style={inp}>{["🤿 ダイビング","💼 職場","🏛️ 規制対応","🎪 展示会","💬 日常"].map(c => <option key={c}>{c}</option>)}</select></Field>
           <Field label="説明"><input value={newScenario.description} onChange={e => setNewScenario(s => ({ ...s, description:e.target.value }))} placeholder="このシナリオの説明" style={inp} /></Field>
           <Field label="難易度"><div style={{ display:"flex", gap:6 }}>{["初級","中級","上級"].map(d => (<button key={d} onClick={() => setNewScenario(s => ({ ...s, difficulty:d }))} style={{ flex:1, padding:"6px 0", borderRadius:8, border:"none", cursor:"pointer", fontSize:12, fontWeight:700, background:newScenario.difficulty===d?diffColor(d):C.surface, color:newScenario.difficulty===d?"#fff":diffColor(d) }}>{d}</button>))}</div></Field>
           <Field label="AIへの指示（英語で）"><textarea value={newScenario.systemPrompt} onChange={e => setNewScenario(s => ({ ...s, systemPrompt:e.target.value }))} placeholder="You are a... Start by..." style={{ ...inp, height:80, resize:"none", fontFamily:"inherit" }} /></Field>
