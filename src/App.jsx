@@ -41,7 +41,7 @@ function markBackupDone(progressCount = 0) {
 }
 
 // ===================== VERSION =====================
-const BUILD_VERSION = "2026-06-22-p14";
+const BUILD_VERSION = "2026-06-24-p15";
 
 // ===================== WEEK KEY =====================
 function getWeekKey() {
@@ -3562,6 +3562,12 @@ const ROLEPLAY_SCENARIOS = [
   { id:"rp12", category:"💬 日常", title:"空港・交通機関でのやり取り", description:"空港や電車で道を聞く・チケットを買う", difficulty:"初級", systemPrompt:`You are an airport or transit staff member. Eriko needs help navigating or buying tickets. Keep responses to 2-3 sentences. Start by asking how you can help her.` },
 ];
 
+// AI応答からフィードバック注釈（【フィードバック】以降）を取り除き、
+// 読み上げ対象の英語部分だけを取り出す
+function extractSpeakableText(text) {
+  return (text || "").split("【フィードバック】")[0].trim();
+}
+
 function RoleplayTab() {
   const [mode, setMode] = useState("list");
   const [selected, setSelected] = useState(null);
@@ -3574,14 +3580,46 @@ function RoleplayTab() {
   const [showAddScenario, setShowAddScenario] = useState(false);
   const [newScenario, setNewScenario] = useState({ title:"", category:"💬 日常", description:"", difficulty:"中級", systemPrompt:"" });
   const [filterCat, setFilterCat] = useState("すべて");
+  const [autoSpeak, setAutoSpeak] = useState(() => load("eriko_roleplay_autospeak", true));
+  const [speakingIdx, setSpeakingIdx] = useState(null); // 現在再生中のメッセージindex（🔊アイコンの状態切替用）
   const messagesEndRef = useRef(null);
+  const lastSpokenIdxRef = useRef(-1); // 自動再生済みのAIメッセージindexを記録（再レンダーでの重複再生防止）
   const allScenarios = [...ROLEPLAY_SCENARIOS, ...customScenarios];
   const categories = ["すべて", "🤿 ダイビング", "💼 職場", "🏛️ 規制当局", "🎪 展示会", "💬 日常"];
   const filtered = filterCat === "すべて" ? allScenarios : allScenarios.filter(s => s.category === filterCat);
   useEffect(() => { save("eriko_custom_scenarios", customScenarios); }, [customScenarios]);
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior:"smooth" }); }, [messages]);
+  useEffect(() => { save("eriko_roleplay_autospeak", autoSpeak); }, [autoSpeak]);
+
+  function speakMessage(idx, text) {
+    const speakable = extractSpeakableText(text);
+    if (!speakable) return;
+    setSpeakingIdx(idx);
+    speak(speakable, () => setSpeakingIdx(prev => (prev === idx ? null : prev)));
+  }
+
+  // 新しいAIメッセージが追加されたら、自動再生がONの場合のみ読み上げる
+  useEffect(() => {
+    if (!autoSpeak) return;
+    if (messages.length === 0) return;
+    const lastIdx = messages.length - 1;
+    const last = messages[lastIdx];
+    if (last.role !== "ai") return;
+    if (lastSpokenIdxRef.current === lastIdx) return;
+    lastSpokenIdxRef.current = lastIdx;
+    speakMessage(lastIdx, last.text);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages, autoSpeak]);
+
+  // タブを離れる・シナリオ終了時に読み上げを停止
+  useEffect(() => {
+    return () => { stopSpeaking(); };
+  }, []);
 
   async function startScenario(scenario) {
+    stopSpeaking();
+    setSpeakingIdx(null);
+    lastSpokenIdxRef.current = -1;
     setSelected(scenario); setMessages([]); setFeedback(null); setInput(""); setLoading(true); setMode("play");
     try { const resp = await callClaude(scenario.systemPrompt, "Start the roleplay now. Begin with your opening line."); setMessages([{ role:"ai", text: resp }]); }
     catch { setMessages([{ role:"ai", text:"Hello! Let's practice English together. How can I help you?" }]); }
@@ -3620,7 +3658,7 @@ function RoleplayTab() {
   if (mode === "result" && feedback) return (
     <div style={{ overflowY:"auto", padding:"14px 16px" }}>
       <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14 }}>
-        <button onClick={() => setMode("list")} style={{ background:"none", border:"none", cursor:"pointer", fontSize:20, color:C.muted }}>←</button>
+        <button onClick={() => { stopSpeaking(); setSpeakingIdx(null); setMode("list"); }} style={{ background:"none", border:"none", cursor:"pointer", fontSize:20, color:C.muted }}>←</button>
         <h3 style={{ margin:0, fontSize:16, fontWeight:800 }}>🎭 ロールプレイ結果</h3>
       </div>
       <div style={{ background:`linear-gradient(135deg,${C.purple},#a855f7)`, borderRadius:14, padding:16, marginBottom:14, color:"#fff", textAlign:"center" }}>
@@ -3630,26 +3668,34 @@ function RoleplayTab() {
       {feedback.strengths?.length > 0 && <Section title="✨ 良かった点" color={C.success}>{feedback.strengths.map((s,i) => <div key={i} style={{ fontSize:12, color:"#166534", marginBottom:4 }}>• {s}</div>)}</Section>}
       {feedback.improvements?.length > 0 && (<Section title="💡 より良い表現" color={C.warn}>{feedback.improvements.map((item,i) => (<div key={i} style={{ marginBottom:10, paddingBottom:10, borderBottom:i<feedback.improvements.length-1?`1px solid ${C.surface}`:"none" }}><div style={{ fontSize:12, color:C.danger }}>❌ {item.original}</div><div style={{ fontSize:12, color:C.success }}>✅ {item.better}</div><div style={{ fontSize:11, color:C.muted, marginTop:3 }}>💡 {item.explanation}</div></div>))}</Section>)}
       {feedback.newPhrases?.length > 0 && (<Section title={`📚 使えるフレーズ (${feedback.newPhrases.length}件)`} color={C.primary}>{feedback.newPhrases.map((p,i) => (<div key={i} style={{ marginBottom:6, fontSize:12 }}><span style={{ fontWeight:700 }}>{p.english}</span><span style={{ color:C.muted }}> — {p.japanese}</span>{p.context && <div style={{ fontSize:11, color:C.subtle }}>{p.context}</div>}</div>))}</Section>)}
-      <button onClick={() => { setMode("list"); setSelected(null); setMessages([]); setFeedback(null); }} style={{ width:"100%", padding:14, borderRadius:12, border:"none", background:C.purple, color:"#fff", fontSize:15, fontWeight:700, cursor:"pointer", marginTop:8 }}>シナリオ一覧に戻る</button>
+      <button onClick={() => { stopSpeaking(); setSpeakingIdx(null); setMode("list"); setSelected(null); setMessages([]); setFeedback(null); }} style={{ width:"100%", padding:14, borderRadius:12, border:"none", background:C.purple, color:"#fff", fontSize:15, fontWeight:700, cursor:"pointer", marginTop:8 }}>シナリオ一覧に戻る</button>
     </div>
   );
   if (mode === "play" && selected) return (
     <div style={{ display:"flex", flexDirection:"column", height:"100%" }}>
       <div style={{ padding:"12px 16px", background:C.card, borderBottom:`1px solid ${C.border}`, display:"flex", alignItems:"center", gap:10 }}>
-        <button onClick={() => setMode("list")} style={{ background:"none", border:"none", cursor:"pointer", fontSize:20, color:C.muted }}>←</button>
+        <button onClick={() => { stopSpeaking(); setSpeakingIdx(null); setMode("list"); }} style={{ background:"none", border:"none", cursor:"pointer", fontSize:20, color:C.muted }}>←</button>
         <div style={{ flex:1 }}><div style={{ fontSize:13, fontWeight:700, color:C.slate }}>{selected.title}</div><div style={{ fontSize:10, color:C.subtle }}>{selected.category}</div></div>
         <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+          <button onClick={() => { setAutoSpeak(v => { const next = !v; if (!next) stopSpeaking(); return next; }); setSpeakingIdx(null); }} title={autoSpeak ? "AIの発言を自動読み上げ中（タップでオフ）" : "自動読み上げはオフ（タップでオン）"} style={{ padding:"4px 8px", borderRadius:8, border:"none", cursor:"pointer", fontSize:12, background:autoSpeak?C.primaryLight:C.surface, color:autoSpeak?C.primary:C.subtle, flexShrink:0 }}>{autoSpeak ? "🔊" : "🔇"}</button>
           <button onClick={() => setFeedbackMode(m => m==="normal"?"practice":"normal")} style={{ padding:"4px 8px", borderRadius:8, border:"none", cursor:"pointer", fontSize:10, fontWeight:700, background:feedbackMode==="practice"?C.purple:C.surface, color:feedbackMode==="practice"?"#fff":C.muted }}>{feedbackMode==="practice"?"練習モード":"通常モード"}</button>
-          <button onClick={endAndGetFeedback} disabled={loading || messages.length < 2} style={{ padding:"4px 10px", borderRadius:8, border:"none", cursor:"pointer", fontSize:11, fontWeight:700, background:messages.length>=2?C.success:C.border, color:messages.length>=2?"#fff":C.subtle }}>終了</button>
+          <button onClick={() => { stopSpeaking(); setSpeakingIdx(null); endAndGetFeedback(); }} disabled={loading || messages.length < 2} style={{ padding:"4px 10px", borderRadius:8, border:"none", cursor:"pointer", fontSize:11, fontWeight:700, background:messages.length>=2?C.success:C.border, color:messages.length>=2?"#fff":C.subtle }}>終了</button>
         </div>
       </div>
       <div style={{ flex:1, overflowY:"auto", padding:"12px 16px" }}>
         {messages.map((m, i) => (
-          <div key={i} style={{ marginBottom:12, display:"flex", justifyContent:m.role==="user"?"flex-end":"flex-start" }}>
-            {m.role === "ai" && <div style={{ width:28, height:28, borderRadius:99, background:C.purple, display:"flex", alignItems:"center", justifyContent:"center", fontSize:14, marginRight:8, flexShrink:0, marginTop:2 }}>🎭</div>}
-            <div style={{ maxWidth:"78%", padding:"10px 13px", borderRadius:14, background:m.role==="user"?C.primary:C.card, color:m.role==="user"?"#fff":C.slate, border:m.role==="ai"?`1px solid ${C.border}`:"none", fontSize:13, lineHeight:1.6, borderBottomRightRadius:m.role==="user"?4:14, borderBottomLeftRadius:m.role==="ai"?4:14 }}>
+          <div key={i} style={{ marginBottom:12, display:"flex", justifyContent:m.role==="user"?"flex-end":"flex-start", alignItems:"flex-start", gap:6 }}>
+            {m.role === "ai" && <div style={{ width:28, height:28, borderRadius:99, background:C.purple, display:"flex", alignItems:"center", justifyContent:"center", fontSize:14, marginRight:2, flexShrink:0, marginTop:2 }}>🎭</div>}
+            <div style={{ maxWidth:"72%", padding:"10px 13px", borderRadius:14, background:m.role==="user"?C.primary:C.card, color:m.role==="user"?"#fff":C.slate, border:m.role==="ai"?`1px solid ${C.border}`:"none", fontSize:13, lineHeight:1.6, borderBottomRightRadius:m.role==="user"?4:14, borderBottomLeftRadius:m.role==="ai"?4:14 }}>
               {m.text.split("【フィードバック】").map((part, pi) => (<span key={pi} style={{ color:pi>0?C.purple:"inherit", fontSize:pi>0?11:13, display:pi>0?"block":"inline", marginTop:pi>0?6:0, fontStyle:pi>0?"italic":"normal" }}>{pi>0?"💡 ":""}{part}</span>))}
             </div>
+            {m.role === "ai" && (
+              <button
+                onClick={() => { if (speakingIdx === i) { stopSpeaking(); setSpeakingIdx(null); } else { speakMessage(i, m.text); } }}
+                title={speakingIdx === i ? "停止" : "もう一度読む"}
+                style={{ background:speakingIdx===i?C.purpleLight:C.surface, border:"none", borderRadius:99, width:26, height:26, display:"flex", alignItems:"center", justifyContent:"center", fontSize:12, cursor:"pointer", flexShrink:0, marginTop:2 }}
+              >{speakingIdx === i ? "⏸" : "🔊"}</button>
+            )}
           </div>
         ))}
         {loading && (<div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:12 }}><div style={{ width:28, height:28, borderRadius:99, background:C.purple, display:"flex", alignItems:"center", justifyContent:"center", fontSize:14 }}>🎭</div><div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:14, borderBottomLeftRadius:4, padding:"10px 13px", fontSize:13, color:C.subtle }}>入力中…</div></div>)}
