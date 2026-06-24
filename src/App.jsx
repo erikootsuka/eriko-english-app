@@ -41,7 +41,7 @@ function markBackupDone(progressCount = 0) {
 }
 
 // ===================== VERSION =====================
-const BUILD_VERSION = "2026-06-24-p15";
+const BUILD_VERSION = "2026-06-24-p16";
 
 // ===================== WEEK KEY =====================
 function getWeekKey() {
@@ -183,6 +183,26 @@ function getStreak(prog) {
     if (diff <= 1) { streak++; cur = new Date(d); } else break;
   }
   return streak;
+}
+
+// ===================== GOAL AUTO-LINK (目標の自動進捗連携) =====================
+const GOAL_LINK_OPTIONS = [
+  { id:"diary",   label:"📔 日記投稿数", unit:"件" },
+  { id:"phrases", label:"📚 表現集の件数", unit:"件" },
+  { id:"vocab",   label:"🔤 語彙の件数", unit:"件" },
+  { id:"streak",  label:"🔥 連続学習日数", unit:"日" },
+];
+
+// linkTypeを持つ目標について、実績データから現在値を自動算出する。
+// linkTypeがない（=従来の手動目標）場合はgoal.currentをそのまま返す。
+function computeLinkedCurrent(goal, { phrases, vocab, progress, diaryCount }) {
+  switch (goal.linkType) {
+    case "diary": return diaryCount;
+    case "phrases": return phrases.length;
+    case "vocab": return vocab.length;
+    case "streak": return getStreak(progress);
+    default: return goal.current;
+  }
 }
 
 function levelColor(level) {
@@ -1945,16 +1965,23 @@ function PracticeTab({ phrases }) {
 
   const writingPhraseSources = phrases.filter(p => hasUsage(p, "writing"));
 
+  // selectedDirection（手動選択中のtransDirection）と原文の実際の言語が一致するかチェックしてから練習を開始する。
+  // 不一致の場合は練習を開始せず、案内メッセージを返す（呼び出し側でアラート表示等に使う）。
   function startTranslationPractice(sourceText, isJapaneseSource) {
-    const direction = isJapaneseSource ? "ja2en" : "en2ja";
-    setTransDirection(direction);
+    const requiredDirection = isJapaneseSource ? "ja2en" : "en2ja";
+    if (transDirection !== requiredDirection) {
+      const sourceLabel = isJapaneseSource ? "日本語" : "英語";
+      const neededLabel = isJapaneseSource ? "🇯🇵→🇬🇧（日本語→英語）" : "🇬🇧→🇯🇵（英語→日本語）";
+      return { ok:false, message: `この原文は${sourceLabel}です。練習するには「${neededLabel}」を選んでください。` };
+    }
     const sentences = transUnit === "sentence" ? splitIntoSentences(sourceText, isJapaneseSource) : [sourceText.trim()];
-    if (sentences.length === 0) return;
+    if (sentences.length === 0) return { ok:false, message:"原文が空です。" };
     setTransSentences(sentences);
     setTransIdx(0);
     setTransInput("");
     setTransResult(null);
     setTransSubMode("practice");
+    return { ok:true };
   }
 
   function addSavedSource() {
@@ -2397,6 +2424,16 @@ function PracticeTab({ phrases }) {
         </div>
 
         <div style={{ background:C.card, borderRadius:12, padding:12, border:`1px solid ${C.border}`, marginBottom:14 }}>
+          <div style={{ fontSize:11, fontWeight:700, color:C.mid, marginBottom:8 }}>練習方向</div>
+          <div style={{ display:"flex", gap:8 }}>
+            {[["ja2en","🇯🇵→🇬🇧 日本語→英語"],["en2ja","🇬🇧→🇯🇵 英語→日本語"]].map(([v,l]) => (
+              <button key={v} onClick={() => setTransDirection(v)} style={{ flex:1, padding:"8px 0", borderRadius:8, border:`2px solid ${transDirection===v?C.purple:C.border}`, background:transDirection===v?C.purpleLight:C.card, cursor:"pointer", fontSize:12, fontWeight:transDirection===v?700:400, color:transDirection===v?C.purple:C.muted }}>{l}</button>
+            ))}
+          </div>
+          <div style={{ fontSize:10, color:C.subtle, marginTop:6 }}>原文の言語と選んだ方向が一致しないものは練習を開始できません</div>
+        </div>
+
+        <div style={{ background:C.card, borderRadius:12, padding:12, border:`1px solid ${C.border}`, marginBottom:14 }}>
           <div style={{ fontSize:11, fontWeight:700, color:C.mid, marginBottom:8 }}>出題単位</div>
           <div style={{ display:"flex", gap:8 }}>
             {[["whole","文章全体のまま"],["sentence","1文ずつ分割"]].map(([v,l]) => (
@@ -2420,8 +2457,9 @@ function PracticeTab({ phrases }) {
             onClick={() => {
               if (!pasteText.trim()) return;
               const isJapaneseSource = /[\u3000-\u9fff\uff00-\uffef]/.test(pasteText);
+              const result = startTranslationPractice(pasteText, isJapaneseSource);
+              if (!result.ok) { alert(result.message); return; }
               if (savePaste) addSavedSource();
-              startTranslationPractice(pasteText, isJapaneseSource);
               setPasteText(""); setPasteTitle(""); setSavePaste(false);
             }}
             disabled={!pasteText.trim()}
@@ -2436,11 +2474,17 @@ function PracticeTab({ phrases }) {
           </div>
           {savedSources.length === 0 ? (
             <div style={{ fontSize:12, color:C.subtle, textAlign:"center", padding:"12px 0" }}>まだ保存された原文がありません</div>
-          ) : savedSources.map(s => (
-            <div key={s.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 0", borderBottom:`1px solid ${C.surface}` }}>
-              <div onClick={() => { if (!showSourceManage) startTranslationPractice(s.text, /[\u3000-\u9fff\uff00-\uffef]/.test(s.text)); }} style={{ flex:1, minWidth:0, cursor: showSourceManage ? "default" : "pointer" }}>
+          ) : savedSources.map(s => {
+            const isJa = /[\u3000-\u9fff\uff00-\uffef]/.test(s.text);
+            const matches = transDirection === (isJa ? "ja2en" : "en2ja");
+            return (
+            <div key={s.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 0", borderBottom:`1px solid ${C.surface}`, opacity: (showSourceManage || matches) ? 1 : 0.45 }}>
+              <div onClick={() => { if (!showSourceManage) { const result = startTranslationPractice(s.text, isJa); if (!result.ok) alert(result.message); } }} style={{ flex:1, minWidth:0, cursor: showSourceManage ? "default" : "pointer" }}>
                 <div style={{ fontSize:13, fontWeight:700, color:C.slate, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{s.title}</div>
-                <div style={{ fontSize:10, color:C.subtle }}>{s.text.length}文字 • {s.addedDate}</div>
+                <div style={{ display:"flex", gap:5, alignItems:"center", marginTop:2 }}>
+                  <span style={{ fontSize:9, padding:"1px 6px", borderRadius:99, background:isJa?C.accentLight:C.primaryLight, color:isJa?C.accent:C.primary, fontWeight:700 }}>{isJa ? "🇯🇵 日本語" : "🇬🇧 英語"}</span>
+                  <span style={{ fontSize:10, color:C.subtle }}>{s.text.length}文字 • {s.addedDate}</span>
+                </div>
               </div>
               {showSourceManage ? (
                 deletingSourceId === s.id ? (
@@ -2455,7 +2499,7 @@ function PracticeTab({ phrases }) {
                 <div style={{ fontSize:16, color:C.border, flexShrink:0 }}>▶</div>
               )}
             </div>
-          ))}
+          );})}
         </div>
 
         <div style={{ background:C.card, borderRadius:12, padding:14, border:`1px solid ${C.border}` }}>
@@ -2466,11 +2510,14 @@ function PracticeTab({ phrases }) {
           ) : writingPhraseSources.map(p => {
             const useEnglish = p.english.length >= (p.japanese?.length || 0);
             const displayText = useEnglish ? p.english : p.japanese;
+            const requiredDirection = useEnglish ? "en2ja" : "ja2en";
+            const matches = transDirection === requiredDirection;
             return (
-              <div key={p.id} onClick={() => startTranslationPractice(displayText, !useEnglish)} style={{ padding:"8px 0", borderBottom:`1px solid ${C.surface}`, cursor:"pointer", display:"flex", alignItems:"center", gap:8 }}>
+              <div key={p.id} onClick={() => { const result = startTranslationPractice(displayText, !useEnglish); if (!result.ok) alert(result.message); }} style={{ padding:"8px 0", borderBottom:`1px solid ${C.surface}`, cursor:"pointer", display:"flex", alignItems:"center", gap:8, opacity: matches ? 1 : 0.45 }}>
                 <div style={{ flex:1, minWidth:0 }}>
                   <div style={{ fontSize:12, color:C.slate, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{displayText}</div>
                   <div style={{ display:"flex", gap:5, marginTop:3 }}>
+                    <span style={{ fontSize:9, padding:"1px 6px", borderRadius:99, background:useEnglish?C.primaryLight:C.accentLight, color:useEnglish?C.primary:C.accent, fontWeight:700 }}>{useEnglish ? "🇬🇧 英語原文" : "🇯🇵 日本語原文"}</span>
                     <span style={{ fontSize:9, padding:"1px 6px", borderRadius:99, background:levelBg(p.level), color:levelColor(p.level), fontWeight:700 }}>{p.level}</span>
                     <span style={{ fontSize:9, padding:"1px 6px", borderRadius:99, background:C.primaryLight, color:C.primary, fontWeight:600 }}>{p.category}</span>
                     <span style={{ fontSize:9, color:C.subtle }}>{displayText.length}文字</span>
@@ -2644,7 +2691,7 @@ function PracticeTab({ phrases }) {
 function GoalsTab({ goals, setGoals, progress, setProgress, weaknesses, setWeaknesses, phrases, setPhrases, vocab, setVocab, earnedBadges = [], onGoalComplete }) {
   const [showAdd, setShowAdd] = useState(false);
   const [showDownload, setShowDownload] = useState(false);
-  const [newG, setNewG] = useState({ title:"", target:30, unit:"表現", deadline:"" });
+  const [newG, setNewG] = useState({ title:"", target:30, unit:"表現", deadline:"", linkType:null });
   const [restoreMsg, setRestoreMsg] = useState("");
   const fileInputJSON = useRef(null);
   const fileInputPhrasesCSV = useRef(null);
@@ -2710,6 +2757,8 @@ function GoalsTab({ goals, setGoals, progress, setProgress, weaknesses, setWeakn
   const t = today();
   const todayStudied = [...new Set(progress.filter(p => p.date === t).map(p => p.id))].length;
   const streak = getStreak(progress);
+  const diaryCount = load(STORAGE.diary, []).length;
+  const linkedData = { phrases, vocab, progress, diaryCount };
   const inp = { width:"100%", padding:"8px 10px", borderRadius:8, border:`1px solid ${C.border}`, fontSize:13, boxSizing:"border-box", outline:"none" };
   const byDate = {};
   progress.forEach(p => { byDate[p.date] = (byDate[p.date]||0)+1; });
@@ -3174,16 +3223,28 @@ function GoalsTab({ goals, setGoals, progress, setProgress, weaknesses, setWeakn
 
       <LearningCalendar progress={progress} />
       {weaknesses.length > 0 && (<div style={{ background:C.accentLight, border:`1px solid ${C.accentMid}`, borderRadius:12, padding:14, marginBottom:14 }}><div style={{ fontSize:11, fontWeight:700, color:"#9a3412", marginBottom:8 }}>⚠️ 苦手表現 TOP{Math.min(5, weaknesses.length)}</div>{weaknesses.slice(0,5).map(w => (<div key={w.id} style={{ fontSize:12, color:"#92400e", marginBottom:4 }}>• {w.english} <span style={{ color:C.accent }}>({w.count}回ミス)</span></div>))}</div>)}
-      {goals.filter(g => !g.completed).map(g => { const pct = Math.min(100, Math.round((g.current/g.target)*100)); return (
+      {goals.filter(g => !g.completed).map(g => {
+        const linkOpt = GOAL_LINK_OPTIONS.find(o => o.id === g.linkType);
+        const current = computeLinkedCurrent(g, linkedData);
+        const pct = Math.min(100, Math.round((current/g.target)*100));
+        return (
         <div key={g.id} style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:12, padding:14, marginBottom:10 }}>
-          <div style={{ display:"flex", justifyContent:"space-between", marginBottom:6 }}><div style={{ fontWeight:700, fontSize:14 }}>{g.title}</div><div style={{ fontSize:12, color:C.primary, fontWeight:700 }}>{pct}%</div></div>
+          <div style={{ display:"flex", justifyContent:"space-between", marginBottom:6, alignItems:"center", gap:8 }}>
+            <div style={{ fontWeight:700, fontSize:14, flex:1 }}>{g.title}</div>
+            {linkOpt && <span style={{ fontSize:9, padding:"2px 7px", borderRadius:99, background:C.primaryLight, color:C.primary, fontWeight:700, whiteSpace:"nowrap" }}>🔗 {linkOpt.label}</span>}
+            <div style={{ fontSize:12, color:C.primary, fontWeight:700 }}>{pct}%</div>
+          </div>
           <div style={{ background:C.border, borderRadius:99, height:8, marginBottom:8, overflow:"hidden" }}><div style={{ width:pct+"%", height:"100%", background:pct>=100?C.success:C.primary, borderRadius:99, transition:"width 0.4s" }} /></div>
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-            <div style={{ fontSize:12, color:C.muted }}>{g.current}/{g.target} {g.unit}{g.deadline && <span style={{marginLeft:6}}>📅 {g.deadline}</span>}</div>
+            <div style={{ fontSize:12, color:C.muted }}>{current}/{g.target} {g.unit}{g.deadline && <span style={{marginLeft:6}}>📅 {g.deadline}</span>}</div>
             <div style={{ display:"flex", gap:6 }}>
-              <button onClick={() => setGoals(p => p.map(x => x.id===g.id?{...x,current:Math.max(0,x.current-1)}:x))} style={{ background:C.surface,border:"none",borderRadius:6,width:28,height:28,cursor:"pointer",fontWeight:700,color:C.muted }}>−</button>
-              <button onClick={() => setGoals(p => p.map(x => x.id===g.id?{...x,current:Math.min(x.target,x.current+1)}:x))} style={{ background:C.primaryLight,border:"none",borderRadius:6,width:28,height:28,cursor:"pointer",fontWeight:700,color:C.primary }}>＋</button>
-              {pct >= 100 && <button onClick={() => onGoalComplete ? onGoalComplete(g.id) : setGoals(p => p.map(x => x.id===g.id?{...x,completed:true}:x))} style={{ background:C.success,border:"none",borderRadius:6,padding:"0 8px",cursor:"pointer",color:"#fff",fontSize:11,fontWeight:700 }}>達成！</button>}
+              {!linkOpt && (
+                <>
+                  <button onClick={() => setGoals(p => p.map(x => x.id===g.id?{...x,current:Math.max(0,x.current-1)}:x))} style={{ background:C.surface,border:"none",borderRadius:6,width:28,height:28,cursor:"pointer",fontWeight:700,color:C.muted }}>−</button>
+                  <button onClick={() => setGoals(p => p.map(x => x.id===g.id?{...x,current:Math.min(x.target,x.current+1)}:x))} style={{ background:C.primaryLight,border:"none",borderRadius:6,width:28,height:28,cursor:"pointer",fontWeight:700,color:C.primary }}>＋</button>
+                </>
+              )}
+              {pct >= 100 && <button onClick={() => { setGoals(p => p.map(x => x.id===g.id?{...x,current}:x)); if (onGoalComplete) onGoalComplete(g.id); else setGoals(p => p.map(x => x.id===g.id?{...x,current,completed:true}:x)); }} style={{ background:C.success,border:"none",borderRadius:6,padding:"0 8px",cursor:"pointer",color:"#fff",fontSize:11,fontWeight:700 }}>達成！</button>}
             </div>
           </div>
         </div>
@@ -3194,12 +3255,31 @@ function GoalsTab({ goals, setGoals, progress, setProgress, weaknesses, setWeakn
         <Modal onClose={() => setShowAdd(false)}>
           <h4 style={{ margin:"0 0 12px",fontSize:15 }}>目標を追加</h4>
           <Field label="タイトル"><input value={newG.title} onChange={e => setNewG(g => ({ ...g, title:e.target.value }))} placeholder="例: 表現を100個覚える" style={inp} /></Field>
+          <Field label="進捗の連携（任意）">
+            <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginBottom:6 }}>
+              <button onClick={() => setNewG(g => ({ ...g, linkType:null }))} style={{ padding:"6px 12px", borderRadius:8, border:`1px solid ${!newG.linkType ? C.primary : C.border}`, background: !newG.linkType ? C.primaryLight : C.surface, color: !newG.linkType ? C.primary : C.muted, fontSize:11, fontWeight: !newG.linkType ? 700 : 400, cursor:"pointer" }}>✋ 手動で記録</button>
+              {GOAL_LINK_OPTIONS.map(o => (
+                <button key={o.id} onClick={() => setNewG(g => ({ ...g, linkType:o.id, unit:o.unit }))} style={{ padding:"6px 12px", borderRadius:8, border:`1px solid ${newG.linkType===o.id ? C.primary : C.border}`, background: newG.linkType===o.id ? C.primaryLight : C.surface, color: newG.linkType===o.id ? C.primary : C.muted, fontSize:11, fontWeight: newG.linkType===o.id ? 700 : 400, cursor:"pointer" }}>{o.label}</button>
+              ))}
+            </div>
+            {newG.linkType ? (
+              <div style={{ fontSize:10, color:C.primary }}>🔗 選択した実績データから自動で進捗が更新されます（手動操作は不要です）</div>
+            ) : (
+              <div style={{ fontSize:10, color:C.subtle }}>＋／−ボタンで自分で記録するタイプの目標です</div>
+            )}
+          </Field>
           <div style={{ display:"flex",gap:8,marginBottom:10 }}>
             <Field label="目標数" style={{ flex:2 }}><input type="number" value={newG.target} onChange={e => setNewG(g => ({ ...g, target:Number(e.target.value) }))} style={inp} /></Field>
-            <Field label="単位" style={{ flex:3 }}><select value={newG.unit} onChange={e => setNewG(g => ({ ...g, unit:e.target.value }))} style={inp}>{["表現","クイズ","日","回"].map(u => <option key={u}>{u}</option>)}</select></Field>
+            <Field label="単位" style={{ flex:3 }}>
+              {newG.linkType ? (
+                <input value={newG.unit} disabled style={{ ...inp, background:C.surface, color:C.subtle }} />
+              ) : (
+                <select value={newG.unit} onChange={e => setNewG(g => ({ ...g, unit:e.target.value }))} style={inp}>{["表現","クイズ","日","回"].map(u => <option key={u}>{u}</option>)}</select>
+              )}
+            </Field>
           </div>
           <Field label="期限（任意）"><input type="date" value={newG.deadline} onChange={e => setNewG(g => ({ ...g, deadline:e.target.value }))} style={inp} /></Field>
-          <ModalButtons onCancel={() => setShowAdd(false)} onOk={() => { if(!newG.title.trim())return; setGoals(p => [{...newG,id:uid(),current:0,completed:false,createdDate:today()},...p]); setNewG({title:"",target:30,unit:"表現",deadline:""}); setShowAdd(false); }} okLabel="追加する" />
+          <ModalButtons onCancel={() => setShowAdd(false)} onOk={() => { if(!newG.title.trim())return; const initialCurrent = newG.linkType ? computeLinkedCurrent({ linkType:newG.linkType }, linkedData) : 0; setGoals(p => [{...newG,id:uid(),current:initialCurrent,completed:false,createdDate:today()},...p]); setNewG({title:"",target:30,unit:"表現",deadline:"",linkType:null}); setShowAdd(false); }} okLabel="追加する" />
         </Modal>
       )}
     </div>
@@ -3582,8 +3662,13 @@ function RoleplayTab() {
   const [filterCat, setFilterCat] = useState("すべて");
   const [autoSpeak, setAutoSpeak] = useState(() => load("eriko_roleplay_autospeak", true));
   const [speakingIdx, setSpeakingIdx] = useState(null); // 現在再生中のメッセージindex（🔊アイコンの状態切替用）
+  const [isRecording, setIsRecording] = useState(false);
   const messagesEndRef = useRef(null);
   const lastSpokenIdxRef = useRef(-1); // 自動再生済みのAIメッセージindexを記録（再レンダーでの重複再生防止）
+  const recognitionRef = useRef(null);
+  const recordingTimeoutRef = useRef(null);
+  const silenceTimeoutRef = useRef(null);
+  const stopRecordingRef = useRef(null);
   const allScenarios = [...ROLEPLAY_SCENARIOS, ...customScenarios];
   const categories = ["すべて", "🤿 ダイビング", "💼 職場", "🏛️ 規制当局", "🎪 展示会", "💬 日常"];
   const filtered = filterCat === "すべて" ? allScenarios : allScenarios.filter(s => s.category === filterCat);
@@ -3611,14 +3696,22 @@ function RoleplayTab() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages, autoSpeak]);
 
-  // タブを離れる・シナリオ終了時に読み上げを停止
+  // タブを離れる・シナリオ終了時に読み上げと録音を停止
   useEffect(() => {
-    return () => { stopSpeaking(); };
+    return () => {
+      stopSpeaking();
+      if (recordingTimeoutRef.current) clearTimeout(recordingTimeoutRef.current);
+      if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
+      if (recognitionRef.current) {
+        try { recognitionRef.current.onend = null; recognitionRef.current.onerror = null; recognitionRef.current.onresult = null; recognitionRef.current.abort(); } catch {}
+      }
+    };
   }, []);
 
   async function startScenario(scenario) {
     stopSpeaking();
     setSpeakingIdx(null);
+    if (isRecording) stopRecording(false);
     lastSpokenIdxRef.current = -1;
     setSelected(scenario); setMessages([]); setFeedback(null); setInput(""); setLoading(true); setMode("play");
     try { const resp = await callClaude(scenario.systemPrompt, "Start the roleplay now. Begin with your opening line."); setMessages([{ role:"ai", text: resp }]); }
@@ -3626,10 +3719,11 @@ function RoleplayTab() {
     setLoading(false);
   }
 
-  async function sendMessage() {
-    if (!input.trim() || loading) return;
-    const userMsg = input.trim(); setInput("");
-    const newMessages = [...messages, { role:"user", text:userMsg }]; setMessages(newMessages); setLoading(true);
+  async function sendMessage(overrideText) {
+    const text = (overrideText ?? input).trim();
+    if (!text || loading) return;
+    setInput("");
+    const newMessages = [...messages, { role:"user", text }]; setMessages(newMessages); setLoading(true);
     try {
       const history = newMessages.map(m => `${m.role==="ai"?"assistant":"user"}: ${m.text}`).join("\n");
       const sys = feedbackMode === "practice" ? `${selected.systemPrompt}\n\nAfter the user's message, do TWO things:\n1. Continue the roleplay naturally (in character)\n2. Add a brief feedback note in Japanese at the end, formatted as:\n【フィードバック】correct/natural phrasing suggestion if needed, or 「自然な英語です！」if it's good.` : selected.systemPrompt;
@@ -3637,6 +3731,109 @@ function RoleplayTab() {
       setMessages([...newMessages, { role:"ai", text: resp }]);
     } catch { setMessages([...newMessages, { role:"ai", text:"Sorry, could you repeat that?" }]); }
     setLoading(false);
+  }
+
+  // 録音停止時に呼ばれる。認識結果があれば自動送信し、空ならテキスト入力欄に何も入れず録音待機状態に戻す
+  function startRecording() {
+    if (!("webkitSpeechRecognition" in window) && !("SpeechRecognition" in window)) {
+      alert("このブラウザは音声認識に対応していません。Chromeをお試しください。");
+      return;
+    }
+    if (recognitionRef.current) {
+      try { recognitionRef.current.onend = null; recognitionRef.current.onerror = null; recognitionRef.current.onresult = null; recognitionRef.current.abort(); } catch {}
+      recognitionRef.current = null;
+    }
+    stopSpeaking();
+    setSpeakingIdx(null);
+
+    let userStopped = false;
+    let accumulatedText = "";
+
+    const finish = (shouldSend) => {
+      setIsRecording(false);
+      if (recordingTimeoutRef.current) { clearTimeout(recordingTimeoutRef.current); recordingTimeoutRef.current = null; }
+      if (silenceTimeoutRef.current) { clearTimeout(silenceTimeoutRef.current); silenceTimeoutRef.current = null; }
+      if (shouldSend) {
+        const finalText = accumulatedText.trim();
+        if (finalText) sendMessage(finalText);
+      }
+    };
+
+    function createRecognizer() {
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      const rec = new SR();
+      rec.lang = "en-US";
+      rec.continuous = false;
+      rec.interimResults = true;
+
+      rec.onresult = (e) => {
+        let finalText = "";
+        let interimText = "";
+        for (let i = 0; i < e.results.length; i++) {
+          const transcript = e.results[i][0].transcript;
+          if (e.results[i].isFinal) finalText += transcript + " ";
+          else interimText += transcript;
+        }
+        if (finalText) accumulatedText += finalText;
+        setInput((accumulatedText + interimText).trim());
+        resetSilenceTimer();
+      };
+
+      rec.onerror = (e) => {
+        if (e?.error === "no-speech" || e?.error === "aborted") return;
+        userStopped = true;
+        finish(true);
+      };
+
+      rec.onend = () => {
+        if (userStopped) { finish(true); return; }
+        try {
+          rec.start();
+        } catch {
+          finish(true);
+        }
+      };
+
+      return rec;
+    }
+
+    const resetSilenceTimer = () => {
+      if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
+      silenceTimeoutRef.current = setTimeout(() => {
+        userStopped = true;
+        try { recognitionRef.current?.stop(); } catch {}
+      }, 3000);
+    };
+
+    const rec = createRecognizer();
+    recognitionRef.current = rec;
+    stopRecordingRef.current = (shouldSend) => { userStopped = true; try { rec.stop(); } catch {} if (!shouldSend) { try { rec.abort(); } catch {} } };
+
+    try {
+      rec.start();
+      setIsRecording(true);
+      setInput("");
+      accumulatedText = "";
+    } catch {
+      finish(false);
+      return;
+    }
+
+    resetSilenceTimer();
+
+    recordingTimeoutRef.current = setTimeout(() => {
+      userStopped = true;
+      try { rec.stop(); } catch {}
+      finish(true);
+    }, 30000);
+  }
+
+  function stopRecording(shouldSend = true) {
+    if (stopRecordingRef.current) stopRecordingRef.current(shouldSend);
+    else { try { recognitionRef.current?.abort(); } catch {} }
+    setIsRecording(false);
+    if (recordingTimeoutRef.current) { clearTimeout(recordingTimeoutRef.current); recordingTimeoutRef.current = null; }
+    if (silenceTimeoutRef.current) { clearTimeout(silenceTimeoutRef.current); silenceTimeoutRef.current = null; }
   }
 
   async function endAndGetFeedback() {
@@ -3658,7 +3855,7 @@ function RoleplayTab() {
   if (mode === "result" && feedback) return (
     <div style={{ overflowY:"auto", padding:"14px 16px" }}>
       <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14 }}>
-        <button onClick={() => { stopSpeaking(); setSpeakingIdx(null); setMode("list"); }} style={{ background:"none", border:"none", cursor:"pointer", fontSize:20, color:C.muted }}>←</button>
+        <button onClick={() => { stopSpeaking(); setSpeakingIdx(null); if (isRecording) stopRecording(false); setMode("list"); }} style={{ background:"none", border:"none", cursor:"pointer", fontSize:20, color:C.muted }}>←</button>
         <h3 style={{ margin:0, fontSize:16, fontWeight:800 }}>🎭 ロールプレイ結果</h3>
       </div>
       <div style={{ background:`linear-gradient(135deg,${C.purple},#a855f7)`, borderRadius:14, padding:16, marginBottom:14, color:"#fff", textAlign:"center" }}>
@@ -3668,18 +3865,18 @@ function RoleplayTab() {
       {feedback.strengths?.length > 0 && <Section title="✨ 良かった点" color={C.success}>{feedback.strengths.map((s,i) => <div key={i} style={{ fontSize:12, color:"#166534", marginBottom:4 }}>• {s}</div>)}</Section>}
       {feedback.improvements?.length > 0 && (<Section title="💡 より良い表現" color={C.warn}>{feedback.improvements.map((item,i) => (<div key={i} style={{ marginBottom:10, paddingBottom:10, borderBottom:i<feedback.improvements.length-1?`1px solid ${C.surface}`:"none" }}><div style={{ fontSize:12, color:C.danger }}>❌ {item.original}</div><div style={{ fontSize:12, color:C.success }}>✅ {item.better}</div><div style={{ fontSize:11, color:C.muted, marginTop:3 }}>💡 {item.explanation}</div></div>))}</Section>)}
       {feedback.newPhrases?.length > 0 && (<Section title={`📚 使えるフレーズ (${feedback.newPhrases.length}件)`} color={C.primary}>{feedback.newPhrases.map((p,i) => (<div key={i} style={{ marginBottom:6, fontSize:12 }}><span style={{ fontWeight:700 }}>{p.english}</span><span style={{ color:C.muted }}> — {p.japanese}</span>{p.context && <div style={{ fontSize:11, color:C.subtle }}>{p.context}</div>}</div>))}</Section>)}
-      <button onClick={() => { stopSpeaking(); setSpeakingIdx(null); setMode("list"); setSelected(null); setMessages([]); setFeedback(null); }} style={{ width:"100%", padding:14, borderRadius:12, border:"none", background:C.purple, color:"#fff", fontSize:15, fontWeight:700, cursor:"pointer", marginTop:8 }}>シナリオ一覧に戻る</button>
+      <button onClick={() => { stopSpeaking(); setSpeakingIdx(null); if (isRecording) stopRecording(false); setMode("list"); setSelected(null); setMessages([]); setFeedback(null); }} style={{ width:"100%", padding:14, borderRadius:12, border:"none", background:C.purple, color:"#fff", fontSize:15, fontWeight:700, cursor:"pointer", marginTop:8 }}>シナリオ一覧に戻る</button>
     </div>
   );
   if (mode === "play" && selected) return (
     <div style={{ display:"flex", flexDirection:"column", height:"100%" }}>
       <div style={{ padding:"12px 16px", background:C.card, borderBottom:`1px solid ${C.border}`, display:"flex", alignItems:"center", gap:10 }}>
-        <button onClick={() => { stopSpeaking(); setSpeakingIdx(null); setMode("list"); }} style={{ background:"none", border:"none", cursor:"pointer", fontSize:20, color:C.muted }}>←</button>
+        <button onClick={() => { stopSpeaking(); setSpeakingIdx(null); if (isRecording) stopRecording(false); setMode("list"); }} style={{ background:"none", border:"none", cursor:"pointer", fontSize:20, color:C.muted }}>←</button>
         <div style={{ flex:1 }}><div style={{ fontSize:13, fontWeight:700, color:C.slate }}>{selected.title}</div><div style={{ fontSize:10, color:C.subtle }}>{selected.category}</div></div>
         <div style={{ display:"flex", gap:6, alignItems:"center" }}>
           <button onClick={() => { setAutoSpeak(v => { const next = !v; if (!next) stopSpeaking(); return next; }); setSpeakingIdx(null); }} title={autoSpeak ? "AIの発言を自動読み上げ中（タップでオフ）" : "自動読み上げはオフ（タップでオン）"} style={{ padding:"4px 8px", borderRadius:8, border:"none", cursor:"pointer", fontSize:12, background:autoSpeak?C.primaryLight:C.surface, color:autoSpeak?C.primary:C.subtle, flexShrink:0 }}>{autoSpeak ? "🔊" : "🔇"}</button>
           <button onClick={() => setFeedbackMode(m => m==="normal"?"practice":"normal")} style={{ padding:"4px 8px", borderRadius:8, border:"none", cursor:"pointer", fontSize:10, fontWeight:700, background:feedbackMode==="practice"?C.purple:C.surface, color:feedbackMode==="practice"?"#fff":C.muted }}>{feedbackMode==="practice"?"練習モード":"通常モード"}</button>
-          <button onClick={() => { stopSpeaking(); setSpeakingIdx(null); endAndGetFeedback(); }} disabled={loading || messages.length < 2} style={{ padding:"4px 10px", borderRadius:8, border:"none", cursor:"pointer", fontSize:11, fontWeight:700, background:messages.length>=2?C.success:C.border, color:messages.length>=2?"#fff":C.subtle }}>終了</button>
+          <button onClick={() => { stopSpeaking(); setSpeakingIdx(null); if (isRecording) stopRecording(false); endAndGetFeedback(); }} disabled={loading || messages.length < 2} style={{ padding:"4px 10px", borderRadius:8, border:"none", cursor:"pointer", fontSize:11, fontWeight:700, background:messages.length>=2?C.success:C.border, color:messages.length>=2?"#fff":C.subtle }}>終了</button>
         </div>
       </div>
       <div style={{ flex:1, overflowY:"auto", padding:"12px 16px" }}>
@@ -3701,10 +3898,17 @@ function RoleplayTab() {
         {loading && (<div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:12 }}><div style={{ width:28, height:28, borderRadius:99, background:C.purple, display:"flex", alignItems:"center", justifyContent:"center", fontSize:14 }}>🎭</div><div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:14, borderBottomLeftRadius:4, padding:"10px 13px", fontSize:13, color:C.subtle }}>入力中…</div></div>)}
         <div ref={messagesEndRef} />
       </div>
-      <div style={{ padding:"6px 16px", background:C.surface, borderTop:`1px solid ${C.surface}` }}><div style={{ fontSize:10, color:C.subtle }}>💡 ヒント: {selected.description}</div></div>
+      <div style={{ padding:"6px 16px", background:C.surface, borderTop:`1px solid ${C.surface}` }}><div style={{ fontSize:10, color:C.subtle }}>{isRecording ? "🎤 話してください…（3秒間無音で自動送信）" : `💡 ヒント: ${selected.description}`}</div></div>
       <div style={{ padding:"10px 16px", background:C.card, borderTop:`1px solid ${C.border}`, display:"flex", gap:8 }}>
-        <input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendMessage();} }} placeholder="英語で入力してください…" style={{ ...inp, flex:1 }} disabled={loading} />
-        <button onClick={sendMessage} disabled={loading || !input.trim()} style={{ padding:"8px 14px", borderRadius:8, border:"none", background:input.trim()?C.primary:C.border, color:input.trim()?"#fff":C.subtle, cursor:"pointer", fontSize:14, fontWeight:700, flexShrink:0 }}>送信</button>
+        <button
+          type="button"
+          onClick={() => { if (isRecording) stopRecording(true); else startRecording(); }}
+          disabled={loading}
+          title={isRecording ? "停止して送信" : "音声で入力"}
+          style={{ width:38, height:38, borderRadius:99, border:"none", background:isRecording?C.danger:C.purpleLight, color:isRecording?"#fff":C.purple, fontSize:16, cursor:loading?"default":"pointer", flexShrink:0, boxShadow:isRecording?`0 0 0 4px ${C.dangerMid}`:"none", transition:"all 0.2s" }}
+        >{isRecording ? "⏹" : "🎤"}</button>
+        <input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendMessage();} }} placeholder={isRecording ? "認識中…" : "英語で入力してください…"} style={{ ...inp, flex:1 }} disabled={loading || isRecording} />
+        <button onClick={() => sendMessage()} disabled={loading || !input.trim() || isRecording} style={{ padding:"8px 14px", borderRadius:8, border:"none", background:(input.trim()&&!isRecording)?C.primary:C.border, color:(input.trim()&&!isRecording)?"#fff":C.subtle, cursor:"pointer", fontSize:14, fontWeight:700, flexShrink:0 }}>送信</button>
       </div>
     </div>
   );
